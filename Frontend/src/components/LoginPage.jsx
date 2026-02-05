@@ -37,7 +37,9 @@ console.log("User role raw:", user?.role, "normalized:", roleNorm);
 
 if (roleNorm === "lineleader") {
   navigate("/lineleader", { replace: true });
-} else {
+}else if (roleNorm === "supervisor") {
+        navigate("/admin", { replace: true }); // Add supervisor route
+      } else {
   navigate("/planner", { replace: true });
 }
 
