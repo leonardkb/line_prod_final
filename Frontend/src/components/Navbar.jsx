@@ -7,6 +7,7 @@ export default function Navbar() {
   const menu = [
     { name: "Line Planner", path: "/planner" },
     { name: "Line Information", path: "/line_info" },
+    { name: "Logout" , path: "/"}
   ];
 
   return (
