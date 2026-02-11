@@ -1753,6 +1753,203 @@ app.post("/api/add-operation/:runId", async (req, res) => {
   }
 });
 
+// --------------------------------------------------------------
+// SUPERVISOR DASHBOARD ENDPOINTS
+// --------------------------------------------------------------
+
+// Middleware: only supervisors allowed
+const requireSupervisor = (req, res, next) => {
+  if (req.user.role !== 'supervisor') {
+    return res.status(403).json({
+      success: false,
+      error: 'Access denied. Supervisor role required.'
+    });
+  }
+  next();
+};
+
+/**
+ * GET /api/supervisor/summary?date=YYYY-MM-DD
+ * Returns:
+ *   totalTarget, totalSewed, totalOperators, targetAchievement
+ */
+// ✅ Supervisor summary – FIXED efficiency calculation
+app.get('/api/supervisor/summary',
+  authenticateToken,
+  requireSupervisor,
+  async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await setSchema(client);
+      const { date } = req.query;
+      if (!date) {
+        return res.status(400).json({ success: false, error: 'date parameter required' });
+      }
+
+      // 1) Total target (already correct – direct sum)
+      const targetResult = await client.query(
+        `SELECT COALESCE(SUM(target_pcs), 0) as total_target
+         FROM line_runs
+         WHERE run_date = $1`,
+        [date]
+      );
+      const totalTarget = parseFloat(targetResult.rows[0].total_target) || 0;
+
+      // 2) Total sewed (already correct – direct sum)
+      const sewedResult = await client.query(
+        `SELECT COALESCE(SUM(se.sewed_qty), 0) as total_sewed
+         FROM operation_sewed_entries se
+         JOIN line_runs lr ON se.run_id = lr.id
+         WHERE lr.run_date = $1`,
+        [date]
+      );
+      const totalSewed = parseFloat(sewedResult.rows[0].total_sewed) || 0;
+
+      // 3) Total operators (already correct – distinct count)
+      const operatorsResult = await client.query(
+        `SELECT COUNT(DISTINCT ro.operator_no) as total_operators
+         FROM run_operators ro
+         JOIN line_runs lr ON ro.run_id = lr.id
+         WHERE lr.run_date = $1`,
+        [date]
+      );
+      const totalOperators = parseInt(operatorsResult.rows[0].total_operators) || 0;
+
+      // 4) Efficiency – FIXED: no duplication of minutes
+      const efficiencyResult = await client.query(`
+        WITH 
+          run_available_minutes AS (
+            SELECT 
+              id,
+              (working_hours * operators_count * 60) AS available_minutes
+            FROM line_runs
+            WHERE run_date = $1
+          ),
+          run_sam_output AS (
+            SELECT 
+              lr.id,
+              SUM(lr.sam_minutes * se.sewed_qty) AS sam_output
+            FROM line_runs lr
+            JOIN operation_sewed_entries se ON lr.id = se.run_id
+            WHERE lr.run_date = $1
+            GROUP BY lr.id
+          )
+        SELECT 
+          COALESCE(SUM(ram.available_minutes), 0) AS total_available_minutes,
+          COALESCE(SUM(rso.sam_output), 0) AS total_sam_output
+        FROM run_available_minutes ram
+        LEFT JOIN run_sam_output rso ON ram.id = rso.id
+      `, [date]);
+
+      const row = efficiencyResult.rows[0];
+      const totalSamOutput = parseFloat(row.total_sam_output) || 0;
+      const totalAvailableMinutes = parseFloat(row.total_available_minutes) || 0;
+      const overallEfficiency = totalAvailableMinutes > 0
+        ? (totalSamOutput / totalAvailableMinutes) * 100
+        : 0;
+
+      // 5) Target achievement
+      const targetAchievement = totalTarget > 0 ? (totalSewed / totalTarget) * 100 : 0;
+
+      res.json({
+        success: true,
+        date,
+        summary: {
+          totalTarget: Math.round(totalTarget * 100) / 100,
+          totalSewed: Math.round(totalSewed * 100) / 100,
+          totalOperators,
+          targetAchievement: Math.round(targetAchievement * 100) / 100,
+          overallEfficiency: Math.round(overallEfficiency * 100) / 100
+        }
+      });
+    } catch (err) {
+      console.error('❌ /api/supervisor/summary error:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * GET /api/supervisor/line-performance?date=YYYY-MM-DD
+ * Returns per‑line: line_no, totalTarget, totalSewed, achievement, efficiency
+ */
+
+app.get('/api/supervisor/line-performance',
+  authenticateToken,
+  requireSupervisor,
+  async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await setSchema(client);
+      const { date } = req.query;
+      if (!date) {
+        return res.status(400).json({ success: false, error: 'date parameter required' });
+      }
+
+      const query = `
+        WITH 
+          -- 1) Sum target per line directly from line_runs (no joins)
+          line_targets AS (
+            SELECT line_no, SUM(target_pcs) AS total_target
+            FROM line_runs
+            WHERE run_date = $1
+            GROUP BY line_no
+          ),
+          -- 2) Sum sewed quantity per line via the sewed entries
+          line_sewed AS (
+            SELECT lr.line_no, COALESCE(SUM(se.sewed_qty), 0) AS total_sewed
+            FROM line_runs lr
+            JOIN run_operators ro ON lr.id = ro.run_id
+            JOIN operator_operations oo ON ro.id = oo.run_operator_id
+            JOIN operation_sewed_entries se ON oo.id = se.operation_id
+            WHERE lr.run_date = $1
+            GROUP BY lr.line_no
+          ),
+          -- 3) Count distinct operators per line
+          line_operators AS (
+            SELECT lr.line_no, COUNT(DISTINCT ro.operator_no) AS operators_count
+            FROM line_runs lr
+            JOIN run_operators ro ON lr.id = ro.run_id
+            WHERE lr.run_date = $1
+            GROUP BY lr.line_no
+          )
+        SELECT 
+          lt.line_no,
+          lt.total_target,
+          COALESCE(ls.total_sewed, 0) AS total_sewed,
+          COALESCE(lo.operators_count, 0) AS operators_count,
+          CASE 
+            WHEN lt.total_target > 0 
+            THEN (COALESCE(ls.total_sewed, 0) / lt.total_target) * 100 
+            ELSE 0 
+          END AS achievement
+        FROM line_targets lt
+        LEFT JOIN line_sewed ls ON lt.line_no = ls.line_no
+        LEFT JOIN line_operators lo ON lt.line_no = lo.line_no
+        ORDER BY lt.line_no;
+      `;
+
+      const result = await client.query(query, [date]);
+      
+      const lines = result.rows.map(row => ({
+        lineNo: row.line_no,
+        totalTarget: parseFloat(row.total_target) || 0,
+        totalSewed: parseFloat(row.total_sewed) || 0,
+        operators: parseInt(row.operators_count) || 0,
+        achievement: Math.round((parseFloat(row.achievement) || 0) * 100) / 100
+      }));
+
+      res.json({ success: true, date, lines });
+    } catch (err) {
+      console.error('❌ /api/supervisor/line-performance error:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    } finally {
+      client.release();
+    }
+  }
+);
 // ✅ Health check
 app.get("/api/health", async (req, res) => {
   const client = await pool.connect();
