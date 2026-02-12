@@ -60,37 +60,55 @@ export default function HourlyGrid({ target, slots, stitched, onChangeStitched }
 
           <tbody>
             <tr>
-              <Td sticky className="text-gray-600 font-medium">Slot Hours</Td>
-              {(slots || []).map((s) => (
-                <Td key={s.id}>{safeNum(s.hours).toFixed(2)}</Td>
+              <Td sticky className="text-gray-600 font-medium border-r border-gray-200">Slot Hours</Td>
+              {(slots || []).map((s, i) => (
+                <Td 
+                  key={s.id} 
+                  className={`${i < slots.length - 1 ? 'border-r border-gray-200' : ''}`}
+                >
+                  {safeNum(s.hours).toFixed(2)}
+                </Td>
               ))}
-              <Td className="font-semibold">{wh.toFixed(2)}</Td>
+              <Td className="font-semibold border-l border-gray-200">{wh.toFixed(2)}</Td>
             </tr>
 
             <tr>
-              <Td sticky className="text-gray-600 font-medium">Slot Target</Td>
+              <Td sticky className="text-gray-600 font-medium border-r border-gray-200">Slot Target</Td>
               {slotTargets.map((v, i) => (
-                <Td key={slots[i].id} className="font-medium">{v.toFixed(2)}</Td>
+                <Td 
+                  key={slots[i].id} 
+                  className={`font-medium ${i < slots.length - 1 ? 'border-r border-gray-200' : ''}`}
+                >
+                  {v.toFixed(2)}
+                </Td>
               ))}
-              <Td className="font-semibold">{t.toFixed(2)}</Td>
+              <Td className="font-semibold border-l border-gray-200">{t.toFixed(2)}</Td>
             </tr>
 
             <tr>
-              <Td sticky className="text-gray-600 font-medium">Cum Target</Td>
+              <Td sticky className="text-gray-600 font-medium border-r border-gray-200">Cum Target</Td>
               {cumTargets.map((v, i) => (
-                <Td key={slots[i].id} className="font-semibold">{v.toFixed(2)}</Td>
+                <Td 
+                  key={slots[i].id} 
+                  className={`font-semibold ${i < slots.length - 1 ? 'border-r border-gray-200' : ''}`}
+                >
+                  {v.toFixed(2)}
+                </Td>
               ))}
-              <Td className="font-semibold">{t.toFixed(2)}</Td>
-            </tr>
-
-            <tr className="h-2">
-              <td colSpan={(slots?.length || 0) + 2} className="bg-transparent" />
+              <Td className="font-semibold border-l border-gray-200">{t.toFixed(2)}</Td>
             </tr>
 
             <tr>
-              <Td sticky className="text-gray-900 font-semibold">Sewed (input)</Td>
-              {(slots || []).map((s) => (
-                <Td key={s.id}>
+              <td colSpan={(slots?.length || 0) + 2} className="h-3 bg-transparent" />
+            </tr>
+
+            <tr>
+              <Td sticky className="text-gray-900 font-semibold border-r border-gray-200 border-t border-gray-200">Sewed (input)</Td>
+              {(slots || []).map((s, i) => (
+                <Td 
+                  key={s.id} 
+                  className={`border-t border-gray-200 ${i < slots.length - 1 ? 'border-r border-gray-200' : ''}`}
+                >
                   <input
                     value={stitched?.[s.id] ?? ""}
                     onChange={(e) => onChangeStitched(s.id, e.target.value)}
@@ -101,15 +119,20 @@ export default function HourlyGrid({ target, slots, stitched, onChangeStitched }
                   />
                 </Td>
               ))}
-              <Td className="font-semibold">{totalStitched}</Td>
+              <Td className="font-semibold border-t border-gray-200 border-l border-gray-200">{totalStitched}</Td>
             </tr>
 
             <tr>
-              <Td sticky className="text-gray-600 font-medium">Cum Sewed</Td>
+              <Td sticky className="text-gray-600 font-medium border-r border-gray-200 border-b border-gray-200">Cum Sewed</Td>
               {cumStitched.map((v, i) => (
-                <Td key={slots[i].id} className="font-semibold">{v}</Td>
+                <Td 
+                  key={slots[i].id} 
+                  className={`font-semibold border-b border-gray-200 ${i < slots.length - 1 ? 'border-r border-gray-200' : ''}`}
+                >
+                  {v}
+                </Td>
               ))}
-              <Td className="font-semibold">{totalStitched}</Td>
+              <Td className="font-semibold border-b border-gray-200 border-l border-gray-200">{totalStitched}</Td>
             </tr>
           </tbody>
         </table>
@@ -127,7 +150,7 @@ function Th({ children, sticky }) {
     <th
       className={
         "border-y border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 " +
-        (sticky ? "sticky left-0 z-10" : "")
+        (sticky ? "sticky left-0 z-10 after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200" : "")
       }
     >
       {children}
@@ -139,9 +162,9 @@ function Td({ children, sticky, className = "" }) {
   return (
     <td
       className={
-        "border-b border-gray-100 px-3 py-2 text-sm text-gray-900 bg-white " +
-        (sticky ? "sticky left-0 z-10 bg-white" : "") +
-        className
+        "px-3 py-2 text-sm text-gray-900 bg-white " +
+        (sticky ? "sticky left-0 z-10 after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200" : "") +
+        " " + className
       }
     >
       {children}

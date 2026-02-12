@@ -20,7 +20,7 @@ export default function App() {
         <Route path="/planner" element={<PlannerPage />} /> {/* changed from /home */}
         <Route path="/line_info" element={<LineInfo />} />
         <Route path="/" element={<LoginPage />} />
-        <Route path="/admininfo" element={<AdminDashboard />} />
+        <Route path="/admin-dashboard" element={<AdminDashboard />} />
          <Route path="/admin" element={<Dashboard />} />
         <Route path="/lineleader" element={<LineLeaderPage />} />
       </Routes>

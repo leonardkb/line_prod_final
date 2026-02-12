@@ -46,14 +46,7 @@ function AlarmNotification({ visible, onDismiss, onSnooze, lastSavedTime }) {
           </button>
         </div>
         
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={onSnooze}
-            className="flex-1 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50"
-          >
-            Snooze 10 min
-          </button>
-        </div>
+       
       </div>
     </div>
   );
@@ -142,15 +135,17 @@ function HourlyPlanCard({
         <table className="min-w-[620px] w-full border-separate border-spacing-0">
           <thead>
             <tr>
-              <th className="bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 border-y border-gray-200 rounded-tl-xl">
+              <th className="sticky left-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 border-y border-gray-200 border-r border-gray-200 rounded-tl-xl after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200">
                 Row
               </th>
               {slots.map((s, i) => (
                 <th
                   key={s.slot_label}
-                  className={`bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 border-y border-gray-200 whitespace-nowrap ${
-                    i === slots.length - 1 ? "rounded-tr-xl" : ""
-                  }`}
+                  className={`
+                    bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 
+                    border-y border-gray-200 border-r border-gray-200 whitespace-nowrap
+                    ${i === slots.length - 1 ? 'border-r-0 rounded-tr-xl' : ''}
+                  `}
                 >
                   {s.slot_label}
                 </th>
@@ -182,16 +177,19 @@ function HourlyPlanCard({
             />
 
             <tr>
-              <td className="px-3 py-3 text-sm font-semibold text-gray-900 border-b border-gray-200 bg-white">
+              <td className="sticky left-0 z-10 px-3 py-3 text-sm font-semibold text-gray-900 border-b border-gray-200 border-r border-gray-200 bg-white after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200">
                 Sewed (input)
               </td>
-              {slots.map((slot) => {
+              {slots.map((slot, idx) => {
                 const label = slot.slot_label;
                 const v = sewedBySlot?.[label] ?? "";
                 return (
                   <td
                     key={label}
-                    className="px-3 py-3 border-b border-gray-200 bg-white"
+                    className={`
+                      px-3 py-3 border-b border-gray-200 border-r border-gray-200 bg-white
+                      ${idx === slots.length - 1 ? 'border-r-0' : ''}
+                    `}
                   >
                     <input
                       value={v}
@@ -228,18 +226,24 @@ function HourlyRow({ label, slots, renderCell, strong = false, last = false }) {
   return (
     <tr>
       <td
-        className={`px-3 py-3 text-sm font-semibold text-gray-900 bg-white border-b border-gray-200 ${
-          last ? "rounded-bl-xl" : ""
-        }`}
+        className={`
+          sticky left-0 z-10 px-3 py-3 text-sm font-semibold text-gray-900 bg-white 
+          border-b border-gray-200 border-r border-gray-200
+          after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200
+          ${last ? 'rounded-bl-xl' : ''}
+        `}
       >
         {label}
       </td>
       {slots.map((slot, idx) => (
         <td
           key={slot.slot_label}
-          className={`px-3 py-3 text-sm bg-white border-b border-gray-200 whitespace-nowrap ${
-            strong ? "font-semibold text-gray-900" : "text-gray-800"
-          } ${last && idx === slots.length - 1 ? "rounded-br-xl" : ""}`}
+          className={`
+            px-3 py-3 text-sm bg-white border-b border-gray-200 border-r border-gray-200 whitespace-nowrap
+            ${strong ? 'font-semibold text-gray-900' : 'text-gray-800'}
+            ${last && idx === slots.length - 1 ? 'rounded-br-xl' : ''}
+            ${idx === slots.length - 1 ? 'border-r-0' : ''}
+          `}
         >
           {renderCell(slot)}
         </td>
@@ -626,6 +630,9 @@ export default function LineLeaderPage() {
     };
   }, [sewedInputs]);
 
+
+  
+
   async function handleSave() {
     if (!runData?.run?.id) return;
 
@@ -726,6 +733,11 @@ export default function LineLeaderPage() {
               <div className="mt-1 text-sm text-gray-700">
                 Efficiency: {Math.round(safeNum(header.efficiency) * 100)}%
               </div>
+              <div className="mt-1 text-sm text-gray-700">
+                Total Sewed: {totalSewed} 
+              </div>
+
+              
               
               {/* Alarm Status */}
               <div className="mt-2">

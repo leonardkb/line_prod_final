@@ -1,6 +1,5 @@
-
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom"; // Added useSearchParams
 import axios from "axios";
 import NavAdmin from "../components/NavAdmin";
 import Alert from "../components/Alert"; // Import the Alert component
@@ -17,6 +16,7 @@ function toYMD(d) {
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams(); // Added for URL parameters
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -34,6 +34,9 @@ export default function AdminDashboard() {
   // Alerts state
   const [alerts, setAlerts] = useState([]);
   const [showAlerts, setShowAlerts] = useState(true);
+  
+  // Track if auto-load from URL has been attempted
+  const [initialLoadAttempted, setInitialLoadAttempted] = useState(false);
 
   // Generate line options 1-26
   const generateLineOptions = () => {
@@ -185,16 +188,48 @@ export default function AdminDashboard() {
     setUser(storedUser);
     setLines(generateLineOptions());
 
-    // ✅ default date = today (optional)
-    const today = new Date();
-    setSelectedDate(today.toISOString().slice(0, 10));
+    // ✅ Get line and date from URL parameters
+    const lineParam = searchParams.get("line");
+    const dateParam = searchParams.get("date");
+    
+    // Set default date to today if no date param
+    const today = new Date().toISOString().slice(0, 10);
+    setSelectedDate(dateParam || today);
+    
+    // Set line if provided
+    if (lineParam) {
+      setSelectedLine(lineParam);
+    }
 
     setLoading(false);
-  }, [navigate]);
+  }, [navigate, searchParams]);
 
-  const fetchProductionData = async () => {
+  // Auto-fetch data when line and date are set from URL
+  useEffect(() => {
+    // Only fetch if we have both line and date, loading is complete, and we haven't attempted initial load yet
+    if (selectedLine && selectedDate && !loading && !initialLoadAttempted) {
+      setInitialLoadAttempted(true);
+      // Small delay to ensure state is fully updated
+      setTimeout(() => {
+        fetchProductionData(false); // Pass false to indicate this is not a manual load
+      }, 100);
+    }
+  }, [selectedLine, selectedDate, loading]);
+
+  // Update URL when line or date changes manually (optional - to keep URL in sync)
+  useEffect(() => {
+    if (selectedLine && selectedDate && initialLoadAttempted) {
+      // Update URL without reloading the page
+      const url = new URL(window.location);
+      url.searchParams.set('line', selectedLine);
+      url.searchParams.set('date', selectedDate);
+      window.history.replaceState({}, '', url);
+    }
+  }, [selectedLine, selectedDate, initialLoadAttempted]);
+
+  const fetchProductionData = async (isManual = true) => {
     if (!selectedLine || !selectedDate) {
-      alert("Please select both line and date");
+      if (isManual) alert("Please select both line and date");
       return;
     }
 
@@ -223,7 +258,10 @@ export default function AdminDashboard() {
         setRunData(null);
         setSummary(null);
         setOperatorDetails([]);
-        alert(`No production data found for Line ${selectedLine} on ${selectedDate}`);
+        // Only show alert for manual fetches
+        if (isManual) {
+          alert(`No production data found for Line ${selectedLine} on ${selectedDate}`);
+        }
         return;
       }
 
@@ -302,7 +340,10 @@ export default function AdminDashboard() {
 
     } catch (error) {
       console.error("Error fetching production data:", error);
-      alert(error.response?.data?.error || error.message || "Failed to load production data");
+      // Only show alert for manual fetches
+      if (isManual) {
+        alert(error.response?.data?.error || error.message || "Failed to load production data");
+      }
       setRunData(null);
       setSummary(null);
       setOperatorDetails([]);
@@ -411,7 +452,7 @@ export default function AdminDashboard() {
 
             <div className="flex items-end">
               <button
-                onClick={fetchProductionData}
+                onClick={() => fetchProductionData(true)} // Pass true for manual load
                 disabled={loadingData || !selectedLine || !selectedDate}
                 className="w-full px-6 py-2.5 bg-gray-900 text-white font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -419,6 +460,14 @@ export default function AdminDashboard() {
               </button>
             </div>
           </div>
+          
+          {/* Show indicator when data is auto-loaded from URL */}
+          {selectedLine && selectedDate && initialLoadAttempted && !loadingData && runData && (
+            <div className="mt-4 text-xs text-gray-500 flex items-center">
+              <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+              Auto-loaded Line {selectedLine} data for {formatDate(selectedDate)}
+            </div>
+          )}
         </div>
 
         {/* Alerts Section */}
