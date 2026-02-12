@@ -1767,20 +1767,13 @@ const requireSupervisor = (req, res, next) => {
   }
   next();
 };
-
-/**
- * GET /api/supervisor/summary?date=YYYY-MM-DD
- * Returns:
- *   totalTarget, totalSewed, totalOperators, targetAchievement
- */
-// ✅ Supervisor summary – FIXED efficiency calculation
 app.get('/api/supervisor/summary',
   authenticateToken,
   requireSupervisor,
   async (req, res) => {
     const client = await pool.connect();
     try {
-      await setSchema(client);
+      
       const { date } = req.query;
       if (!date) {
         return res.status(400).json({ success: false, error: 'date parameter required' });
@@ -1882,7 +1875,7 @@ app.get('/api/supervisor/line-performance',
   async (req, res) => {
     const client = await pool.connect();
     try {
-      await setSchema(client);
+     
       const { date } = req.query;
       if (!date) {
         return res.status(400).json({ success: false, error: 'date parameter required' });
@@ -1950,6 +1943,7 @@ app.get('/api/supervisor/line-performance',
     }
   }
 );
+
 // ✅ Health check
 app.get("/api/health", async (req, res) => {
   const client = await pool.connect();
