@@ -27,26 +27,21 @@ function AlarmNotification({ visible, onDismiss, onSnooze, lastSavedTime }) {
               <span className="text-lg">⏰</span>
             </div>
             <div>
-              <div className="text-sm font-semibold text-red-800">Time to Update Data!</div>
+              <div className="text-sm font-semibold text-red-800">¡Hora de actualizar datos!</div>
               <div className="mt-1 text-xs text-red-600">
-                Please update your hourly production data.
+                Por favor actualiza tu producción por hora.
                 {lastSavedTime && (
                   <span className="block mt-1">
-                    Last saved: {new Date(lastSavedTime).toLocaleTimeString()}
+                    Último guardado: {new Date(lastSavedTime).toLocaleTimeString()}
                   </span>
                 )}
               </div>
             </div>
           </div>
-          <button
-            onClick={onDismiss}
-            className="text-red-400 hover:text-red-600"
-          >
+          <button onClick={onDismiss} className="text-red-400 hover:text-red-600">
             ✕
           </button>
         </div>
-        
-       
       </div>
     </div>
   );
@@ -63,9 +58,9 @@ function AlarmStatusIndicator({ isActive, isPaused, nextAlarmTime }) {
   };
 
   const getStatusText = () => {
-    if (isPaused) return "Alarm Paused";
-    if (isActive) return "Alarm Active";
-    return "Waiting";
+    if (isPaused) return "Alarma en pausa";
+    if (isActive) return "Alarma activa";
+    return "En espera";
   };
 
   return (
@@ -74,7 +69,7 @@ function AlarmStatusIndicator({ isActive, isPaused, nextAlarmTime }) {
       <span className="text-xs text-gray-600">{getStatusText()}</span>
       {nextAlarmTime && !isPaused && (
         <span className="text-xs text-gray-500">
-          Next: {nextAlarmTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          Próxima: {nextAlarmTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
       )}
     </div>
@@ -87,11 +82,11 @@ function AlarmStatusIndicator({ isActive, isPaused, nextAlarmTime }) {
  * + Total Sewed box + Tip.
  */
 function HourlyPlanCard({
-  slots, // [{slot_label, planned_hours}]
-  slotTargetsMap, // { [slot_label]: {slot_target, cumulative_target} }
-  sewedBySlot, // { [slot_label]: string|number } - SPECIFIC to selected operation
-  onChangeSewed, // (slotLabel, nextValue) => void
-  operationName = "", // Add operation name for context
+  slots,
+  slotTargetsMap,
+  sewedBySlot,
+  onChangeSewed,
+  operationName = "",
 }) {
   const totalSewed = useMemo(() => {
     let sum = 0;
@@ -113,20 +108,20 @@ function HourlyPlanCard({
     <div className="rounded-2xl border bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-gray-900">Hourly Plan</div>
+          <div className="text-sm font-semibold text-gray-900">Plan por hora</div>
           <div className="mt-1 text-xs text-gray-600">
             {operationName && (
-              <span className="font-medium text-gray-900">Operation: {operationName}</span>
+              <span className="font-medium text-gray-900">Operación: {operationName}</span>
             )}
             <br />
-            Slot target = (Target / WorkingHours) × SlotHours.
+            Objetivo por bloque = (Objetivo / Horas de trabajo) × Horas del bloque.
             <br />
-            Cumulative target stops at final meta.
+            El objetivo acumulado se detiene en el último meta.
           </div>
         </div>
 
         <div className="rounded-2xl border bg-white px-4 py-3 text-center">
-          <div className="text-xs text-gray-500">Total Sewed</div>
+          <div className="text-xs text-gray-500">Total cosido</div>
           <div className="text-lg font-semibold text-gray-900">{totalSewed}</div>
         </div>
       </div>
@@ -136,7 +131,7 @@ function HourlyPlanCard({
           <thead>
             <tr>
               <th className="sticky left-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 border-y border-gray-200 border-r border-gray-200 rounded-tl-xl after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200">
-                Row
+                Fila
               </th>
               {slots.map((s, i) => (
                 <th
@@ -144,7 +139,7 @@ function HourlyPlanCard({
                   className={`
                     bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-700 
                     border-y border-gray-200 border-r border-gray-200 whitespace-nowrap
-                    ${i === slots.length - 1 ? 'border-r-0 rounded-tr-xl' : ''}
+                    ${i === slots.length - 1 ? "border-r-0 rounded-tr-xl" : ""}
                   `}
                 >
                   {s.slot_label}
@@ -155,13 +150,13 @@ function HourlyPlanCard({
 
           <tbody>
             <HourlyRow
-              label="Slot Hours"
+              label="Horas del bloque"
               slots={slots}
               renderCell={(slot) => safeNum(slot.planned_hours).toFixed(2)}
             />
 
             <HourlyRow
-              label="Slot Target"
+              label="Objetivo del bloque"
               slots={slots}
               renderCell={(slot) =>
                 safeNum(slotTargetsMap?.[slot.slot_label]?.slot_target).toFixed(2)
@@ -169,7 +164,7 @@ function HourlyPlanCard({
             />
 
             <HourlyRow
-              label="Cum Target"
+              label="Objetivo acumulado"
               slots={slots}
               renderCell={(slot) =>
                 safeNum(slotTargetsMap?.[slot.slot_label]?.cumulative_target).toFixed(2)
@@ -178,7 +173,7 @@ function HourlyPlanCard({
 
             <tr>
               <td className="sticky left-0 z-10 px-3 py-3 text-sm font-semibold text-gray-900 border-b border-gray-200 border-r border-gray-200 bg-white after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200">
-                Sewed (input)
+                Cosido (entrada)
               </td>
               {slots.map((slot, idx) => {
                 const label = slot.slot_label;
@@ -188,7 +183,7 @@ function HourlyPlanCard({
                     key={label}
                     className={`
                       px-3 py-3 border-b border-gray-200 border-r border-gray-200 bg-white
-                      ${idx === slots.length - 1 ? 'border-r-0' : ''}
+                      ${idx === slots.length - 1 ? "border-r-0" : ""}
                     `}
                   >
                     <input
@@ -205,7 +200,7 @@ function HourlyPlanCard({
             </tr>
 
             <HourlyRow
-              label="Cum Sewed"
+              label="Cosido acumulado"
               slots={slots}
               renderCell={(slot) => String(safeNum(cumSewed?.[slot.slot_label] ?? 0))}
               strong
@@ -216,7 +211,7 @@ function HourlyPlanCard({
       </div>
 
       <div className="mt-4 text-xs text-gray-500">
-        Tip: This table scrolls horizontally on mobile. It&apos;s responsive.
+        Tip: Esta tabla se desliza horizontalmente en móvil. Es responsiva.
       </div>
     </div>
   );
@@ -230,7 +225,7 @@ function HourlyRow({ label, slots, renderCell, strong = false, last = false }) {
           sticky left-0 z-10 px-3 py-3 text-sm font-semibold text-gray-900 bg-white 
           border-b border-gray-200 border-r border-gray-200
           after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200
-          ${last ? 'rounded-bl-xl' : ''}
+          ${last ? "rounded-bl-xl" : ""}
         `}
       >
         {label}
@@ -240,9 +235,9 @@ function HourlyRow({ label, slots, renderCell, strong = false, last = false }) {
           key={slot.slot_label}
           className={`
             px-3 py-3 text-sm bg-white border-b border-gray-200 border-r border-gray-200 whitespace-nowrap
-            ${strong ? 'font-semibold text-gray-900' : 'text-gray-800'}
-            ${last && idx === slots.length - 1 ? 'rounded-br-xl' : ''}
-            ${idx === slots.length - 1 ? 'border-r-0' : ''}
+            ${strong ? "font-semibold text-gray-900" : "text-gray-800"}
+            ${last && idx === slots.length - 1 ? "rounded-br-xl" : ""}
+            ${idx === slots.length - 1 ? "border-r-0" : ""}
           `}
         >
           {renderCell(slot)}
@@ -266,24 +261,22 @@ export default function LineLeaderPage() {
   const [alarmPaused, setAlarmPaused] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState(null);
   const [nextAlarmTime, setNextAlarmTime] = useState(null);
-  const [alarmInterval, setAlarmInterval] = useState(20); // 20 minutes default
+  const [alarmInterval, setAlarmInterval] = useState(20);
   const [snoozeUntil, setSnoozeUntil] = useState(null);
   const alarmSoundRef = useRef(null);
   const alarmTimerRef = useRef(null);
 
-  const [latest, setLatest] = useState(null); // { run, slots }
-  const [runData, setRunData] = useState(null); // { run, slots, operators, operations, slotTargets }
+  const [latest, setLatest] = useState(null);
+  const [runData, setRunData] = useState(null);
 
-  // sewedInputs[operationId][slotLabel] = value
   const [sewedInputs, setSewedInputs] = useState({});
 
   // Filters
   const [search, setSearch] = useState("");
   const [operatorFilter, setOperatorFilter] = useState("all");
 
-  // Operator panel toggles + which operation HourlyPlan writes to
   const [openOperatorIds, setOpenOperatorIds] = useState({});
-  const [applyOpByOperatorId, setApplyOpByOperatorId] = useState({}); // operatorId -> operationId
+  const [applyOpByOperatorId, setApplyOpByOperatorId] = useState({});
 
   const user = useMemo(() => {
     try {
@@ -293,77 +286,64 @@ export default function LineLeaderPage() {
     }
   }, []);
 
-  // Initialize alarm sound
   useEffect(() => {
-    alarmSoundRef.current = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=");
-    // Create a simple beep sound
+    alarmSoundRef.current = new Audio(
+      "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
+    );
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
-    
+
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
-    
+
     oscillator.frequency.value = 800;
-    oscillator.type = 'sine';
+    oscillator.type = "sine";
     gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-    
+
     oscillator.start();
     oscillator.stop(audioContext.currentTime + 0.5);
-    
+
     return () => {
-      if (alarmTimerRef.current) {
-        clearTimeout(alarmTimerRef.current);
-      }
+      if (alarmTimerRef.current) clearTimeout(alarmTimerRef.current);
       audioContext.close();
     };
   }, []);
 
-  // Alarm system effect
   useEffect(() => {
     const setupAlarm = () => {
-      if (alarmTimerRef.current) {
-        clearTimeout(alarmTimerRef.current);
-      }
+      if (alarmTimerRef.current) clearTimeout(alarmTimerRef.current);
 
-      if (alarmPaused || snoozeUntil > Date.now()) {
-        return;
-      }
+      if (alarmPaused || snoozeUntil > Date.now()) return;
 
-      const intervalMs = alarmInterval * 60 * 1000; // Convert minutes to milliseconds
+      const intervalMs = alarmInterval * 60 * 1000;
       const nextTime = new Date(Date.now() + intervalMs);
       setNextAlarmTime(nextTime);
 
       alarmTimerRef.current = setTimeout(() => {
         if (!alarmPaused && snoozeUntil < Date.now()) {
           setAlarmVisible(true);
-          // Play alarm sound
           try {
             alarmSoundRef.current.play();
           } catch (e) {
             console.log("Alarm sound failed:", e);
           }
         }
-        setupAlarm(); // Schedule next alarm
+        setupAlarm();
       }, intervalMs);
     };
 
     setupAlarm();
 
     return () => {
-      if (alarmTimerRef.current) {
-        clearTimeout(alarmTimerRef.current);
-      }
+      if (alarmTimerRef.current) clearTimeout(alarmTimerRef.current);
     };
   }, [alarmInterval, alarmPaused, snoozeUntil]);
 
-  // Check snooze status periodically
   useEffect(() => {
     const snoozeCheck = setInterval(() => {
-      if (snoozeUntil && Date.now() > snoozeUntil) {
-        setSnoozeUntil(null);
-      }
-    }, 60000); // Check every minute
+      if (snoozeUntil && Date.now() > snoozeUntil) setSnoozeUntil(null);
+    }, 60000);
 
     return () => clearInterval(snoozeCheck);
   }, [snoozeUntil]);
@@ -378,7 +358,7 @@ export default function LineLeaderPage() {
 
     const lineNo = user.line_number;
     if (!lineNo) {
-      setErrMsg("No line assigned to this user. Please contact admin.");
+      setErrMsg("No hay una línea asignada a este usuario. Por favor contacte al administrador.");
       setLoading(false);
       return;
     }
@@ -387,13 +367,9 @@ export default function LineLeaderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  // Alarm handlers
   const handleDismissAlarm = () => {
     setAlarmVisible(false);
-    // Reset alarm timer
-    if (alarmTimerRef.current) {
-      clearTimeout(alarmTimerRef.current);
-    }
+    if (alarmTimerRef.current) clearTimeout(alarmTimerRef.current);
     const intervalMs = alarmInterval * 60 * 1000;
     alarmTimerRef.current = setTimeout(() => {
       setAlarmVisible(true);
@@ -402,28 +378,22 @@ export default function LineLeaderPage() {
 
   const handleSnoozeAlarm = () => {
     setAlarmVisible(false);
-    setSnoozeUntil(Date.now() + (10 * 60 * 1000)); // Snooze for 10 minutes
+    setSnoozeUntil(Date.now() + 10 * 60 * 1000);
   };
 
   const handleTogglePauseAlarm = () => {
     setAlarmPaused(!alarmPaused);
-    if (!alarmPaused) {
-      setAlarmVisible(false);
-    }
+    if (!alarmPaused) setAlarmVisible(false);
   };
 
-  // Update last saved time when data is saved
   const updateLastSavedTime = () => {
     setLastSavedTime(new Date());
-    localStorage.setItem('lineLeader_lastSaved', new Date().toISOString());
+    localStorage.setItem("lineLeader_lastSaved", new Date().toISOString());
   };
 
-  // Check for existing last saved time on mount
   useEffect(() => {
-    const saved = localStorage.getItem('lineLeader_lastSaved');
-    if (saved) {
-      setLastSavedTime(new Date(saved));
-    }
+    const saved = localStorage.getItem("lineLeader_lastSaved");
+    if (saved) setLastSavedTime(new Date(saved));
   }, []);
 
   async function fetchLatestRun(lineNo) {
@@ -433,14 +403,12 @@ export default function LineLeaderPage() {
 
     try {
       const res = await fetch(
-        `http://localhost:5000/api/lineleader/latest-run?line=${encodeURIComponent(
-          lineNo
-        )}`
+        `http://localhost:5000/api/lineleader/latest-run?line=${encodeURIComponent(lineNo)}`
       );
       const json = await res.json();
 
       if (!json.success) {
-        setErrMsg(json.error || "Failed to load run for your line.");
+        setErrMsg(json.error || "No se pudo cargar la corrida de tu línea.");
         setLatest(null);
         setRunData(null);
         return;
@@ -451,10 +419,10 @@ export default function LineLeaderPage() {
       if (json?.run?.id) {
         await fetchRunData(json.run.id);
       } else {
-        setErrMsg("Latest run found but missing run id.");
+        setErrMsg("Se encontró la última corrida pero falta el ID de la corrida.");
       }
     } catch (e) {
-      setErrMsg(e.message || "Network error");
+      setErrMsg(e.message || "Error de red");
     } finally {
       setLoading(false);
     }
@@ -466,14 +434,13 @@ export default function LineLeaderPage() {
       const json = await res.json();
 
       if (!json.success) {
-        setErrMsg(json.error || "Failed to load run details.");
+        setErrMsg(json.error || "No se pudieron cargar los detalles de la corrida.");
         setRunData(null);
         return;
       }
 
       setRunData(json);
 
-      // Initialize inputs from DB sewed_data
       const next = {};
       for (const block of json.operations || []) {
         for (const op of block.operations || []) {
@@ -488,7 +455,6 @@ export default function LineLeaderPage() {
       }
       setSewedInputs(next);
 
-      // Open first operator and set default "apply operation" for each operator
       const openInit = {};
       const applyInit = {};
       for (let i = 0; i < (json.operations || []).length; i++) {
@@ -503,11 +469,10 @@ export default function LineLeaderPage() {
       setOpenOperatorIds((prev) => ({ ...openInit, ...prev }));
       setApplyOpByOperatorId((prev) => ({ ...applyInit, ...prev }));
     } catch (e) {
-      setErrMsg(e.message || "Network error loading run details");
+      setErrMsg(e.message || "Error de red al cargar los detalles de la corrida");
     }
   }
 
-  // ----- MetaSummary props (keep unchanged) -----
   const header = useMemo(() => {
     const r = latest?.run;
     return {
@@ -533,7 +498,6 @@ export default function LineLeaderPage() {
     }));
   }, [latest]);
 
-  // ops view data
   const slots = useMemo(() => runData?.slots || [], [runData]);
 
   const slotTargetsMap = useMemo(() => {
@@ -549,23 +513,13 @@ export default function LineLeaderPage() {
 
   const operatorsList = useMemo(() => runData?.operators || [], [runData]);
 
-  const quickAccess = useMemo(() => {
-    return (operatorsList || []).map((o) => ({
-      operatorNo: o.operator_no,
-      operatorName: o.operator_name || "",
-    }));
-  }, [operatorsList]);
-
-  // Filter blocks by operator + search
   const operationsBlocks = useMemo(() => {
     const blocks = runData?.operations || [];
 
     const filteredByOperator =
       operatorFilter === "all"
         ? blocks
-        : blocks.filter(
-            (b) => String(b.operator?.operator_no) === String(operatorFilter)
-          );
+        : blocks.filter((b) => String(b.operator?.operator_no) === String(operatorFilter));
 
     const q = search.trim().toLowerCase();
     if (!q) return filteredByOperator;
@@ -602,7 +556,6 @@ export default function LineLeaderPage() {
     }));
   }
 
-  // Total sewed across ALL operations
   const totalSewed = useMemo(() => {
     let sum = 0;
     for (const opId of Object.keys(sewedInputs || {})) {
@@ -612,17 +565,14 @@ export default function LineLeaderPage() {
     return sum;
   }, [sewedInputs]);
 
-  // Helper to get selected operation's data
   const getSelectedOperationData = useMemo(() => {
     return (block) => {
       const applyOpId = applyOpByOperatorId[block.operator?.id];
       if (!applyOpId) return null;
-      
-      return block.operations?.find(op => op.id === applyOpId) || null;
+      return block.operations?.find((op) => op.id === applyOpId) || null;
     };
   }, [applyOpByOperatorId]);
 
-  // Helper to get sewed data for specific operation
   const getOperationSewedData = useMemo(() => {
     return (opId) => {
       if (!opId) return {};
@@ -630,8 +580,15 @@ export default function LineLeaderPage() {
     };
   }, [sewedInputs]);
 
-
-  
+  const getOperationTotal = useMemo(() => {
+    return (opId) => {
+      if (!opId) return 0;
+      let sum = 0;
+      const data = sewedInputs[opId] || {};
+      for (const slotLabel of Object.keys(data)) sum += safeNum(data[slotLabel]);
+      return sum;
+    };
+  }, [sewedInputs]);
 
   async function handleSave() {
     if (!runData?.run?.id) return;
@@ -661,52 +618,34 @@ export default function LineLeaderPage() {
         }
       }
 
-      const res = await fetch(
-        `http://localhost:5000/api/lineleader/update-sewed/${runId}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entries }),
-        }
-      );
+      const res = await fetch(`http://localhost:5000/api/lineleader/update-sewed/${runId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries }),
+      });
 
       const json = await res.json();
       if (!json.success) {
-        setErrMsg(json.error || "Failed to save sewed data.");
+        setErrMsg(json.error || "No se pudieron guardar los datos cosidos.");
         return;
       }
 
-      // Update last saved time and dismiss alarm
       updateLastSavedTime();
       setAlarmVisible(false);
-      
-      setSaveMsg("✅ Saved hourly updates");
+
+      setSaveMsg("✅ Actualizaciones por hora guardadas");
       await fetchRunData(runId);
     } catch (e) {
-      setErrMsg(e.message || "Network error while saving");
+      setErrMsg(e.message || "Error de red al guardar");
     } finally {
       setSaving(false);
     }
   }
 
-  // Calculate total for an operation (for display)
-  const getOperationTotal = useMemo(() => {
-    return (opId) => {
-      if (!opId) return 0;
-      let sum = 0;
-      const data = sewedInputs[opId] || {};
-      for (const slotLabel of Object.keys(data)) {
-        sum += safeNum(data[slotLabel]);
-      }
-      return sum;
-    };
-  }, [sewedInputs]);
-
   return (
     <div className="min-h-screen bg-gray-50">
       <NavBarline />
 
-      {/* Alarm Notification */}
       <AlarmNotification
         visible={alarmVisible}
         onDismiss={handleDismissAlarm}
@@ -715,33 +654,27 @@ export default function LineLeaderPage() {
       />
 
       <div className="mx-auto max-w-6xl p-4 sm:p-6">
-        {/* Top meta card like screenshot */}
         <div className="rounded-3xl border bg-white shadow-sm p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-xl font-semibold text-gray-900">
-                {header.line} • {header.style || "Run"}
+                {header.line} • {header.style || "Corrida"}
                 <span className="ml-3 inline-flex items-center rounded-full border bg-gray-50 px-3 py-1 text-sm text-gray-700">
                   {header.date || ""}
                 </span>
               </div>
 
               <div className="mt-2 text-sm text-gray-700">
-                Operators: {header.operators} &nbsp;&nbsp; Working Hours: {header.workingHours}
+                Operadores: {header.operators} &nbsp;&nbsp; Horas de trabajo: {header.workingHours}
                 &nbsp;&nbsp; SAM: {header.sam} min
               </div>
               <div className="mt-1 text-sm text-gray-700">
-                Efficiency: {Math.round(safeNum(header.efficiency) * 100)}%
+                Eficiencia: {Math.round(safeNum(header.efficiency) * 100)}%
               </div>
-              <div className="mt-1 text-sm text-gray-700">
-                Total Sewed: {totalSewed} 
-              </div>
+              <div className="mt-1 text-sm text-gray-700">Total cosido: {totalSewed}</div>
 
-              
-              
-              {/* Alarm Status */}
               <div className="mt-2">
-                <AlarmStatusIndicator 
+                <AlarmStatusIndicator
                   isActive={!alarmPaused && !snoozeUntil}
                   isPaused={alarmPaused}
                   nextAlarmTime={nextAlarmTime}
@@ -759,7 +692,7 @@ export default function LineLeaderPage() {
                       : "rounded-xl border bg-white px-5 py-2 text-sm font-semibold text-gray-900"
                   }
                 >
-                  Summary
+                  Resumen
                 </button>
                 <button
                   onClick={() => setTab("operations")}
@@ -769,14 +702,13 @@ export default function LineLeaderPage() {
                       : "rounded-xl border bg-white px-5 py-2 text-sm font-semibold text-gray-900"
                   }
                 >
-                  Operations
+                  Operaciones
                 </button>
               </div>
-              
-              {/* Last saved indicator */}
+
               {lastSavedTime && (
                 <div className="text-xs text-gray-500">
-                  Last saved: {new Date(lastSavedTime).toLocaleTimeString()}
+                  Último guardado: {new Date(lastSavedTime).toLocaleTimeString()}
                 </div>
               )}
             </div>
@@ -791,7 +723,7 @@ export default function LineLeaderPage() {
 
         <div className="mt-4">
           {loading ? (
-            <div className="rounded-2xl border bg-white p-5 shadow-sm">Loading…</div>
+            <div className="rounded-2xl border bg-white p-5 shadow-sm">Cargando…</div>
           ) : errMsg ? (
             <div className="rounded-2xl border bg-white p-5 shadow-sm text-red-600">
               {errMsg}
@@ -800,21 +732,19 @@ export default function LineLeaderPage() {
             <MetaSummary header={header} target={target} slots={slotsForSummary} />
           ) : (
             <>
-              {/* Operations & Hourly Tracking */}
               <div className="mt-4 rounded-3xl border bg-white shadow-sm p-6">
                 <div className="text-lg font-semibold text-gray-900">
-                  Operations & Hourly Tracking
+                  Operaciones y Seguimiento por Hora
                 </div>
                 <div className="mt-1 text-sm text-gray-600">
-                  View and update hourly sewed quantities. Changes are saved separately.
+                  Ver y actualizar cantidades cosidas por hora. Los cambios se guardan por separado.
                 </div>
 
-                {/* Filters */}
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
                   <input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search operations..."
+                    placeholder="Buscar operaciones..."
                     className="rounded-xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
                   />
 
@@ -823,10 +753,10 @@ export default function LineLeaderPage() {
                     onChange={(e) => setOperatorFilter(e.target.value)}
                     className="rounded-xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
                   >
-                    <option value="all">All operators</option>
+                    <option value="all">Todos los operadores</option>
                     {operatorsList.map((o) => (
                       <option key={o.id} value={String(o.operator_no)}>
-                        Operator {o.operator_no}
+                        Operador {o.operator_no}
                       </option>
                     ))}
                   </select>
@@ -835,44 +765,13 @@ export default function LineLeaderPage() {
                     onClick={resetFilters}
                     className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-gray-50"
                   >
-                    Reset Filters
+                    Reiniciar filtros
                   </button>
                 </div>
 
-                {/* Alarm Control Buttons - Added here instead of separate section */}
-                {/* <div className="mt-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-600">Alarm Interval:</span>
-                    <select
-                      value={alarmInterval}
-                      onChange={(e) => setAlarmInterval(Number(e.target.value))}
-                      className="rounded-xl border px-3 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-900/10"
-                    >
-                      <option value="15">15 min</option>
-                      <option value="20">20 min</option>
-                      <option value="30">30 min</option>
-                      <option value="60">60 min</option>
-                    </select>
-                  </div>
-                  
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleTogglePauseAlarm}
-                      className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                        alarmPaused
-                          ? "bg-green-600 text-white hover:bg-green-700"
-                          : "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
-                      }`}
-                    >
-                      {alarmPaused ? "▶ Resume Alarm" : "⏸ Pause Alarm"}
-                    </button>
-                  </div>
-                </div> */}
-
-                {/* Total + Save button row */}
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm text-gray-700">
-                    Total Sewed: <span className="font-semibold">{totalSewed}</span>
+                    Total cosido: <span className="font-semibold">{totalSewed}</span>
                   </div>
 
                   <div className="flex gap-2">
@@ -881,34 +780,32 @@ export default function LineLeaderPage() {
                         onClick={handleDismissAlarm}
                         className="rounded-xl bg-red-100 text-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-200"
                       >
-                        ⏰ Dismiss Alarm
+                        ⏰ Cerrar alarma
                       </button>
                     )}
-                    
+
                     <button
                       onClick={handleSave}
                       disabled={saving || !runData}
                       className="rounded-xl bg-green-600 text-white px-6 py-3 text-sm font-semibold
                                  hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {saving ? "Saving..." : "💾 Save Hourly Updates"}
+                      {saving ? "Guardando..." : "💾 Guardar Actualizaciones por Hora"}
                     </button>
                   </div>
                 </div>
 
-                {/* Quick Tips */}
                 {alarmVisible && (
                   <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-orange-800">
-                      ⚡ REMINDER: Time to update your production data!
+                      ⚡ RECORDATORIO: ¡Es hora de actualizar tus datos de producción!
                     </div>
                     <div className="mt-1 text-xs text-orange-600">
-                      Please enter the latest sewed quantities and click "Save Hourly Updates"
+                      Por favor ingresa las cantidades cosidas más recientes y haz clic en "Guardar Actualizaciones por Hora"
                     </div>
                   </div>
                 )}
 
-                {/* Operator sections with Show/Hide + Hourly Plan inside */}
                 <div className="mt-6 space-y-4">
                   {operationsBlocks.map((block) => {
                     const operatorId = block.operator?.id;
@@ -919,15 +816,12 @@ export default function LineLeaderPage() {
                     const selectedOperation = getSelectedOperationData(block);
                     const selectedOperationId = selectedOperation?.id;
                     const selectedOperationName = selectedOperation?.operation_name || "";
-                    
-                    // Get sewed data for the SELECTED operation only
+
                     const selectedOperationSewedData = getOperationSewedData(selectedOperationId);
                     const selectedOperationTotal = getOperationTotal(selectedOperationId);
 
-                    // Calculate total for all operations of this operator
-                    const operatorTotal = block.operations?.reduce((sum, op) => {
-                      return sum + getOperationTotal(op.id);
-                    }, 0) || 0;
+                    const operatorTotal =
+                      block.operations?.reduce((sum, op) => sum + getOperationTotal(op.id), 0) || 0;
 
                     return (
                       <div
@@ -935,23 +829,22 @@ export default function LineLeaderPage() {
                         id={`operator-${operatorNo}`}
                         className="rounded-3xl border bg-white shadow-sm"
                       >
-                        {/* Header */}
                         <div className="p-5 flex items-start justify-between gap-4">
                           <div>
                             <div className="text-lg font-semibold text-gray-900">
-                              Operator {operatorNo}
+                              Operador {operatorNo}
                             </div>
                             <div className="text-sm text-gray-600">
-                              Operator Name:{" "}
+                              Nombre del operador:{" "}
                               <span className="font-medium">{operatorName || "-"}</span>
                             </div>
                             <div className="mt-2 text-sm text-gray-700">
-                              Total sewed (all operations):{" "}
+                              Total cosido (todas las operaciones):{" "}
                               <span className="font-semibold">{operatorTotal}</span>
                             </div>
                             {selectedOperation && (
                               <div className="mt-1 text-sm text-gray-700">
-                                Selected operation total:{" "}
+                                Total de la operación seleccionada:{" "}
                                 <span className="font-semibold text-blue-600">
                                   {selectedOperationTotal}
                                 </span>
@@ -964,16 +857,15 @@ export default function LineLeaderPage() {
                             onClick={() => toggleOperator(operatorId)}
                             className="rounded-xl border bg-white px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                           >
-                            {isOpen ? "Hide" : "Show"}
+                            {isOpen ? "Ocultar" : "Mostrar"}
                           </button>
                         </div>
 
                         {isOpen ? (
                           <div className="px-5 pb-5 space-y-4">
-                            {/* Apply-to operation selector */}
                             <div className="rounded-2xl border bg-gray-50 p-4">
                               <div className="text-sm font-semibold text-gray-900">
-                                Apply Sewed Input To Operation
+                                Aplicar entrada cosida a la operación
                               </div>
                               <div className="mt-2">
                                 <select
@@ -995,11 +887,10 @@ export default function LineLeaderPage() {
                                 </select>
                               </div>
                               <div className="mt-2 text-xs text-gray-600">
-                                Hourly Plan below shows data for the selected operation only.
+                                El plan por hora muestra solo la operación seleccionada.
                               </div>
                             </div>
 
-                            {/* Hourly Plan card for SELECTED operation */}
                             {selectedOperation && (
                               <HourlyPlanCard
                                 slots={slots}
@@ -1013,28 +904,29 @@ export default function LineLeaderPage() {
                               />
                             )}
 
-                            {/* Operations list */}
                             <div className="rounded-2xl border bg-gray-50 p-4">
                               <div className="text-sm font-semibold text-gray-900 mb-3">
-                                All Operations for This Operator
+                                Todas las operaciones de este operador
                               </div>
                               <div className="space-y-2">
                                 {(block.operations || []).map((op) => {
                                   const opTotal = getOperationTotal(op.id);
                                   const isSelected = op.id === selectedOperationId;
-                                  
+
                                   return (
                                     <div
                                       key={op.id}
                                       className={`p-3 rounded-xl border ${
-                                        isSelected 
-                                          ? "border-blue-500 bg-blue-50" 
+                                        isSelected
+                                          ? "border-blue-500 bg-blue-50"
                                           : "border-gray-200 bg-white"
                                       }`}
-                                      onClick={() => setApplyOpByOperatorId(prev => ({
-                                        ...prev,
-                                        [operatorId]: op.id
-                                      }))}
+                                      onClick={() =>
+                                        setApplyOpByOperatorId((prev) => ({
+                                          ...prev,
+                                          [operatorId]: op.id,
+                                        }))
+                                      }
                                     >
                                       <div className="flex justify-between items-center">
                                         <div>
@@ -1042,12 +934,12 @@ export default function LineLeaderPage() {
                                             {op.operation_name}
                                             {isSelected && (
                                               <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                                Selected
+                                                Seleccionado
                                               </span>
                                             )}
                                           </div>
                                           <div className="text-xs text-gray-600 mt-1">
-                                            Capacity: {op.capacity_per_hour}/hr
+                                            Capacidad: {op.capacity_per_hour}/hr
                                           </div>
                                         </div>
                                         <div className="text-sm font-semibold text-gray-900">

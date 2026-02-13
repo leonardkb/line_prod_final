@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import HeaderForm from "../components/HeaderForm";
 import MetaSummary from "../components/MetaSummary";
 import OperationPlanner from "../components/OperationPlanner";
-import SavedRunsViewer from "../components/SavedRunsViewer"; // ✅ Import the new component
+import SavedRunsViewer from "../components/SavedRunsViewer";
 import { calcTargetFromSAM } from "../utils/calc";
 import { buildShiftSlots } from "../utils/timeslots";
 import Navbar from "../components/Navbar";
@@ -19,16 +19,11 @@ const initialHeader = {
 
 export default function PlannerPage() {
   const [header, setHeader] = useState(initialHeader);
-  const [currentRunId, setCurrentRunId] = useState(null); // ✅ Added: store current run ID
-  const [mode, setMode] = useState("planner"); // ✅ "planner" or "view"
+  const [currentRunId, setCurrentRunId] = useState(null);
+  const [mode, setMode] = useState("planner");
 
-  // ✅ Quick nav state
   const [activePanel, setActivePanel] = useState("inputs"); // inputs | summary | operations
-
-  // ✅ Operator No filter state (NOT name)
   const [selectedOperatorNo, setSelectedOperatorNo] = useState("ALL");
-
-  // ✅ Used to build operator buttons (numbers)
   const [operatorNos, setOperatorNos] = useState([]);
 
   const target = useMemo(
@@ -54,7 +49,6 @@ export default function PlannerPage() {
     [header.workingHours]
   );
 
-  // ✅ Create operator pills from operator numbers (unique + numeric sort)
   const operatorButtons = useMemo(() => {
     const uniq = Array.from(
       new Set((operatorNos || []).map((x) => String(x || "").trim()).filter(Boolean))
@@ -62,80 +56,83 @@ export default function PlannerPage() {
     return uniq.sort((a, b) => Number(a) - Number(b));
   }, [operatorNos]);
 
-  // ✅ Handle save success from HeaderForm to get the run ID
   const handleSaveSuccess = (runId) => {
     setCurrentRunId(runId);
-    console.log(`✅ Step 1 saved. Current Run ID: ${runId}`);
+    console.log(`✅ Paso 1 guardado. ID de corrida actual: ${runId}`);
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-     <Navbar/>
+      <Navbar />
+
       <div className="mx-auto max-w-7xl p-4 sm:p-6">
         <div className="mb-4 flex flex-col gap-3">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">
-                Line Planner
+                Planificador de Línea
               </h1>
               <p className="text-sm text-gray-600">
-                Enter line details → get target/meta → plan operations → track hourly output with running totals.
+                Ingresa detalles de la línea → obtén metas → planifica operaciones → da seguimiento horario.
               </p>
             </div>
 
             <div className="hidden sm:block rounded-2xl border bg-white px-4 py-3 shadow-sm">
-              <div className="text-xs text-gray-500">Status</div>
+              <div className="text-xs text-gray-500">Estado</div>
               <div className="text-sm font-medium text-gray-900">
-                {target > 0 ? "Ready to Track" : "Waiting for Inputs"}
-                {currentRunId && ` • Run ID: ${currentRunId}`}
+                {target > 0 ? "Listo para seguimiento" : "Esperando datos"}
+                {currentRunId && ` • ID Corrida: ${currentRunId}`}
               </div>
             </div>
           </div>
 
-          {/* ✅ MODE TOGGLE BUTTONS */}
+          {/* MODE BUTTONS */}
           <div className="flex gap-3">
             <button
               onClick={() => setMode("planner")}
               className={`rounded-xl px-4 py-2 text-sm font-medium border ${
-                mode === "planner" 
-                  ? "bg-gray-900 text-white border-gray-900" 
+                mode === "planner"
+                  ? "bg-gray-900 text-white border-gray-900"
                   : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
               }`}
             >
-              Create New
+              Crear Nuevo
             </button>
+
             <button
               onClick={() => setMode("view")}
               className={`rounded-xl px-4 py-2 text-sm font-medium border ${
-                mode === "view" 
-                  ? "bg-gray-900 text-white border-gray-900" 
+                mode === "view"
+                  ? "bg-gray-900 text-white border-gray-900"
                   : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
               }`}
             >
-              View Saved
+              Ver Guardados
             </button>
           </div>
 
-          {/* ✅ QUICK ACCESS BUTTONS (only shown in planner mode) */}
+          {/* QUICK NAV */}
           {mode === "planner" && (
             <div className="flex flex-wrap gap-2">
               <QuickBtn active={activePanel === "inputs"} onClick={() => setActivePanel("inputs")}>
-                Line Inputs
+                Entradas de Línea
               </QuickBtn>
+
               <QuickBtn active={activePanel === "summary"} onClick={() => setActivePanel("summary")}>
-                Meta Summary
+                Resumen de Metas
               </QuickBtn>
+
               <QuickBtn active={activePanel === "operations"} onClick={() => setActivePanel("operations")}>
-                Operations
+                Operaciones
               </QuickBtn>
             </div>
           )}
 
-          {/* ✅ OPERATOR NO FILTER BUTTONS (only shown in planner mode) */}
+          {/* OPERATOR FILTER */}
           {mode === "planner" && (
             <div className="rounded-2xl border bg-white shadow-sm p-3">
               <div className="text-xs font-medium text-gray-700 mb-2">
-                Quick Operator Filter (by No)
+                Filtro Rápido de Operador (por Numero)
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -143,7 +140,7 @@ export default function PlannerPage() {
                   active={selectedOperatorNo === "ALL"}
                   onClick={() => setSelectedOperatorNo("ALL")}
                 >
-                  All
+                  Todos
                 </Pill>
 
                 {operatorButtons.length ? (
@@ -152,14 +149,14 @@ export default function PlannerPage() {
                       key={no}
                       active={selectedOperatorNo === no}
                       onClick={() => setSelectedOperatorNo(no)}
-                      title={`Operator ${no}`}
+                      title={`Operador ${no}`}
                     >
-                      Operator {no}
+                      Operador {no}
                     </Pill>
                   ))
                 ) : (
                   <div className="text-xs text-gray-500">
-                    Add Operator No in Step 2 to enable quick filtering.
+                    Agregue el numero de operador en el Paso 2 para activar el filtro rápido.
                   </div>
                 )}
               </div>
@@ -167,21 +164,20 @@ export default function PlannerPage() {
           )}
         </div>
 
-        {/* ✅ MAIN CONTENT AREA */}
+        {/* MAIN */}
         {mode === "planner" ? (
-          // Existing planner content
           <>
             {activePanel === "inputs" && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div className="lg:col-span-2">
-                  {/* Pass onSaveSuccess callback to HeaderForm */}
-                  <HeaderForm 
-                    value={header} 
-                    onChange={setHeader}  
+                  <HeaderForm
+                    value={header}
+                    onChange={setHeader}
                     slots={slots}
                     onSaveSuccess={handleSaveSuccess}
                   />
                 </div>
+
                 <div className="lg:col-span-1">
                   <MetaSummary header={header} target={target} slots={slots} />
                 </div>
@@ -189,9 +185,7 @@ export default function PlannerPage() {
             )}
 
             {activePanel === "summary" && (
-              <div className="grid grid-cols-1">
-                <MetaSummary header={header} target={target} slots={slots} />
-              </div>
+              <MetaSummary header={header} target={target} slots={slots} />
             )}
 
             {activePanel === "operations" && (
@@ -199,16 +193,16 @@ export default function PlannerPage() {
                 <OperationPlanner
                   target={target}
                   slots={slots}
-                  selectedOperatorNo={selectedOperatorNo} // ✅ filter by operator no
-                  onOperatorNosChange={setOperatorNos}   // ✅ collect operator nos for buttons
-                  currentRunId={currentRunId}            // ✅ pass current run ID for saving
+                  selectedOperatorNo={selectedOperatorNo}
+                  onOperatorNosChange={setOperatorNos}
+                  currentRunId={currentRunId}
                 />
               </div>
             )}
 
             <div className="mt-10 text-xs text-gray-500">
-              Notes: Target uses SAM (minutes/piece) and the selected efficiency. 
-              Capacity/hour uses 3600 / average(t1..t5).
+              Notas: El objetivo usa SAM (min/pieza) y la eficiencia seleccionada.
+              La capacidad/hora usa 3600 / promedio(t1..t5).
             </div>
           </>
         ) : (
