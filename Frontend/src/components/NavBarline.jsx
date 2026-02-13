@@ -4,10 +4,9 @@ import { Link, NavLink } from "react-router-dom";
 export default function Navbar() {
   const [open, setOpen] = useState(false);
 
-   const menu = [
-     { name: "Logout", path: "/" },
-  
-   ];
+  const menu = [
+    { name: "Cerrar sesión", path: "/" },
+  ];
 
   return (
     <nav className="bg-gray-900 text-white sticky top-0 z-50">
@@ -15,11 +14,11 @@ export default function Navbar() {
         
         {/* Title */}
         <Link to="/" className="text-2xl font-bold">
-          Line Leader
+          Líder de Línea
         </Link>
 
         {/* Desktop Menu */}
-         <ul className="hidden md:flex gap-8 font-medium">
+        <ul className="hidden md:flex gap-8 font-medium">
           {menu.map((item) => (
             <li key={item.path}>
               <NavLink
@@ -36,7 +35,7 @@ export default function Navbar() {
               </NavLink>
             </li>
           ))}
-        </ul> 
+        </ul>
 
         {/* Hamburger Menu Button */}
         <button
@@ -50,7 +49,7 @@ export default function Navbar() {
       {/* Mobile Menu */}
       {open && (
         <div className="bg-gray-800 md:hidden">
-           <ul className="flex flex-col gap-4 px-6 py-4 font-medium">
+          <ul className="flex flex-col gap-4 px-6 py-4 font-medium">
             {menu.map((item) => (
               <li key={item.path}>
                 <NavLink
@@ -68,7 +67,7 @@ export default function Navbar() {
                 </NavLink>
               </li>
             ))}
-          </ul> 
+          </ul>
         </div>
       )}
     </nav>

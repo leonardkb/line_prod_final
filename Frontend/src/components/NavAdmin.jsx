@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Alert from "./Alert"; // Import the Alert component
@@ -34,10 +33,10 @@ export default function NavAdmin({ user, onLogout }) {
 
   useEffect(() => {
     fetchAlertCount();
-    
+
     // Refresh alert count every 2 minutes
     const interval = setInterval(fetchAlertCount, 2 * 60 * 1000);
-    
+
     return () => clearInterval(interval);
   }, []);
 
@@ -50,18 +49,23 @@ export default function NavAdmin({ user, onLogout }) {
   return (
     <nav className="bg-gray-900 text-white sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-        
+
         {/* Title */}
         <div className="text-2xl font-bold">
-          Supervisor Dashboard
+          Panel de Supervisor
         </div>
 
         {/* Desktop Menu */}
         <div className="hidden md:flex items-center gap-6 font-medium">
+
           {/* User Info */}
           <div className="text-sm text-gray-200">
-            <div className="font-semibold">{user?.full_name || user?.username || "Supervisor"}</div>
-            <div className="text-xs text-gray-400">Supervisor</div>
+            <div className="font-semibold">
+              {user?.full_name || user?.username || "Supervisor"}
+            </div>
+            <div className="text-xs text-gray-400">
+              Supervisor
+            </div>
           </div>
 
           {/* Alerts Dropdown */}
@@ -70,14 +74,15 @@ export default function NavAdmin({ user, onLogout }) {
               onClick={() => setShowAlerts(!showAlerts)}
               className="relative px-4 py-2 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors flex items-center gap-2"
             >
-              <span>Alerts</span>
+              <span>Alertas</span>
+
               {alertCount > 0 && (
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
                   {alertCount > 99 ? "99+" : alertCount}
                 </span>
               )}
             </button>
-            
+
             {/* Alerts Dropdown Menu */}
             {showAlerts && (
               <div className="absolute right-0 mt-2 
@@ -93,14 +98,14 @@ export default function NavAdmin({ user, onLogout }) {
               onClick={() => navigate("/admin")}
               className="px-4 py-2 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors"
             >
-              go to dashboard
+              Ir al panel
             </button>
 
             <button
               onClick={handleLogout}
               className="px-4 py-2 text-sm font-medium border border-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
             >
-              Logout
+              Cerrar sesión
             </button>
           </div>
         </div>
@@ -125,10 +130,15 @@ export default function NavAdmin({ user, onLogout }) {
       {open && (
         <div className="bg-gray-800 md:hidden">
           <div className="flex flex-col gap-4 px-6 py-4 font-medium">
+
             {/* User Info Mobile */}
             <div className="pb-3 border-b border-gray-700">
-              <div className="font-semibold text-white">{user?.full_name || user?.username || "Supervisor"}</div>
-              <div className="text-sm text-gray-400">Supervisor</div>
+              <div className="font-semibold text-white">
+                {user?.full_name || user?.username || "Supervisor"}
+              </div>
+              <div className="text-sm text-gray-400">
+                Supervisor
+              </div>
             </div>
 
             {/* Alerts Mobile */}
@@ -139,7 +149,8 @@ export default function NavAdmin({ user, onLogout }) {
               }}
               className="w-full text-left px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors flex justify-between items-center"
             >
-              <span>Alerts</span>
+              <span>Alertas</span>
+
               {alertCount > 0 && (
                 <span className="bg-red-500 text-white text-xs rounded-full h-6 w-6 flex items-center justify-center">
                   {alertCount}
@@ -155,7 +166,7 @@ export default function NavAdmin({ user, onLogout }) {
               }}
               className="w-full text-left px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
             >
-              Go to dashboard
+              Ir al panel
             </button>
 
             <button
@@ -165,19 +176,23 @@ export default function NavAdmin({ user, onLogout }) {
               }}
               className="w-full text-left px-4 py-3 border border-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
             >
-              Logout
+              Cerrar sesión
             </button>
           </div>
         </div>
       )}
-      
+
       {/* Mobile Alerts Panel */}
       {showAlerts && (
         <div className="md:hidden fixed inset-0 bg-black bg-opacity-50 z-50">
           <div className="absolute right-0 top-0 h-full w-96 bg-white shadow-xl overflow-y-auto">
             <div className="p-4">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-bold text-gray-900">Production Alerts</h3>
+
+                <h3 className="text-xl font-bold text-gray-900">
+                  Alertas de Producción
+                </h3>
+
                 <button
                   onClick={() => setShowAlerts(false)}
                   className="text-2xl text-gray-500 hover:text-gray-700"
@@ -185,6 +200,7 @@ export default function NavAdmin({ user, onLogout }) {
                   ×
                 </button>
               </div>
+
               <Alert supervisorMode={true} />
             </div>
           </div>

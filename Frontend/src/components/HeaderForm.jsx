@@ -1,4 +1,3 @@
-
 import { useMemo, useState } from "react";
 import { calcTargetFromSAM, safeNum } from "../utils/calc";
 import { STYLE_EFFICIENCY_PRESETS } from "../utils/efficiency";
@@ -23,7 +22,7 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
     return wh > 0 ? target / wh : 0;
   }, [target, value.workingHours]);
 
-  // ✅ Handle save button click
+  // Guardar
   const handleSave = async () => {
     setLoading(true);
     setMessage("");
@@ -51,10 +50,9 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
       const data = await response.json();
 
       if (data.success) {
-        const messageText = `✅ Saved! Line Run ID: ${data.lineRunId}`;
+        const messageText = `✅ ¡Guardado! ID de corrida: ${data.lineRunId}`;
         setMessage(messageText);
-        
-        // ✅ Call onSaveSuccess callback if provided
+
         if (onSaveSuccess) {
           onSaveSuccess(data.lineRunId);
         }
@@ -62,7 +60,7 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
         setMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ Failed to save: ${err.message}`);
+      setMessage(`❌ Error al guardar: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -71,57 +69,64 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
   return (
     <div className="rounded-2xl border bg-white shadow-sm">
       <div className="px-5 py-4 border-b">
-        <h2 className="font-semibold text-gray-900">Step 1 — Line Inputs</h2>
+        <h2 className="font-semibold text-gray-900">
+          Paso 1 — Datos de la Línea
+        </h2>
         <p className="text-sm text-gray-600">
-          Fill these first. Target will be calculated automatically using SAM and selected efficiency.
+          Complete primero esta información.  
+          La meta se calculará automáticamente usando SAM y la eficiencia seleccionada.
         </p>
       </div>
 
       <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        
         <Field
-          label="Line"
-          placeholder="e.g., Line 12"
+          label="Línea"
+          placeholder="Ej.: Línea 12"
           value={value.line}
           onChange={(v) => set("line", v)}
         />
 
         <Field
-          label="Date"
+          label="Fecha"
           type="date"
           value={value.date}
           onChange={(v) => set("date", v)}
         />
 
         <Field
-          label="Style"
-          placeholder="e.g., POLO-2026"
+          label="Estilo"
+          placeholder="Ej.: POLO-2026"
           value={value.style}
           onChange={(v) => set("style", v)}
         />
 
         <Field
-          label="Operators (count)"
-          placeholder="e.g., 25"
+          label="Operadores (cantidad)"
+          placeholder="Ej.: 25"
           value={value.operators}
           onChange={(v) => set("operators", v)}
         />
 
         <Field
-          label="Working Hours"
-          placeholder="e.g., 8.85"
+          label="Horas de Trabajo"
+          placeholder="Ej.: 8.85"
           value={value.workingHours}
           onChange={(v) => set("workingHours", v)}
         />
 
         <Field
-          label="SAM (minutes/piece)"
-          placeholder="e.g., 18.5"
+          label="SAM (minutos/pieza)"
+          placeholder="Ej.: 18.5"
           value={value.sam}
           onChange={(v) => set("sam", v)}
         />
 
+        {/* Eficiencia */}
         <label className="block">
-          <div className="text-sm font-medium text-gray-800 mb-1">Efficiency</div>
+          <div className="text-sm font-medium text-gray-800 mb-1">
+            Eficiencia
+          </div>
           <select
             value={value.efficiency ?? 0.7}
             onChange={(e) => set("efficiency", Number(e.target.value))}
@@ -135,16 +140,17 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
             ))}
           </select>
           <div className="text-xs text-gray-500 mt-1">
-            Select based on style complexity / line capability.
+            Seleccione según la complejidad del estilo o capacidad de la línea.
           </div>
         </label>
 
+        {/* Métricas */}
         <div className="md:col-span-2 lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Metric label="Target (pieces)" value={target} />
-          <Metric label="Target / hour (pieces)" value={targetPerHour} />
+          <Metric label="Meta (piezas)" value={target} />
+          <Metric label="Meta por hora (piezas)" value={targetPerHour} />
         </div>
 
-        {/* ✅ Save button and message */}
+        {/* Guardar */}
         <div className="md:col-span-2 lg:col-span-3">
           <button
             onClick={handleSave}
@@ -153,14 +159,17 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
                        hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed
                        transition-colors"
           >
-            {loading ? "Saving..." : "💾 Save Production Data"}
+            {loading ? "Guardando..." : "💾 Guardar Datos de Producción"}
           </button>
+
           {message && (
-            <div className={`mt-3 p-3 rounded-lg text-sm ${
-              message.includes("✅") 
-                ? "bg-green-50 text-green-700" 
-                : "bg-red-50 text-red-700"
-            }`}>
+            <div
+              className={`mt-3 p-3 rounded-lg text-sm ${
+                message.includes("✅")
+                  ? "bg-green-50 text-green-700"
+                  : "bg-red-50 text-red-700"
+              }`}
+            >
               {message}
             </div>
           )}
@@ -170,10 +179,14 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
   );
 }
 
+/* ---------- Sub Components ---------- */
+
 function Field({ label, value, onChange, placeholder, type = "text" }) {
   return (
     <label className="block">
-      <div className="text-sm font-medium text-gray-800 mb-1">{label}</div>
+      <div className="text-sm font-medium text-gray-800 mb-1">
+        {label}
+      </div>
       <input
         type={type}
         value={value ?? ""}

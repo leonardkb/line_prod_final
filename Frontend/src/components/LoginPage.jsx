@@ -16,7 +16,6 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Use full backend URL (adjust port if different)
       const response = await axios.post("http://localhost:5000/api/login", {
         username,
         password
@@ -24,32 +23,34 @@ export default function LoginPage() {
 
       const user = response.data.user;
 
-// normalize: "line_leader" / "Line Leader" / "lineleader" => "lineleader"
-const roleNorm = String(user?.role || "")
-  .toLowerCase()
-  .trim()
-  .replace(/[\s_-]/g, "");
+      // normalize role
+      const roleNorm = String(user?.role || "")
+        .toLowerCase()
+        .trim()
+        .replace(/[\s_-]/g, "");
 
-localStorage.setItem("token", response.data.token);
-localStorage.setItem("user", JSON.stringify(user));
+      localStorage.setItem("token", response.data.token);
+      localStorage.setItem("user", JSON.stringify(user));
 
-console.log("User role raw:", user?.role, "normalized:", roleNorm);
+      console.log("User role raw:", user?.role, "normalized:", roleNorm);
 
-if (roleNorm === "lineleader") {
-  navigate("/lineleader", { replace: true });
-}else if (roleNorm === "supervisor") {
-        navigate("/admin", { replace: true }); // Add supervisor route
+      if (roleNorm === "lineleader") {
+        navigate("/lineleader", { replace: true });
+      } else if (roleNorm === "supervisor") {
+        navigate("/admin", { replace: true });
       } else {
-  navigate("/planner", { replace: true });
-}
+        navigate("/planner", { replace: true });
+      }
 
     } catch (err) {
       if (err.response && err.response.data) {
-        setError(err.response.data.error || "Login failed");
-      } else if (err.code === 'ERR_NETWORK') {
-        setError("Cannot connect to server. Please ensure backend is running on port 5000.");
+        setError(err.response.data.error || "Error al iniciar sesión");
+      } else if (err.code === "ERR_NETWORK") {
+        setError(
+          "No se puede conectar al servidor. Verifique que el backend esté ejecutándose en el puerto 5000."
+        );
       } else {
-        setError("Network error. Please try again.");
+        setError("Error de red. Intente nuevamente.");
       }
       console.error("Login error:", err);
     } finally {
@@ -60,49 +61,58 @@ if (roleNorm === "lineleader") {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4">
       <div className="w-full max-w-md rounded-2xl bg-white shadow-lg p-6 sm:p-8">
+        
+        {/* Title */}
         <h1 className="text-2xl font-semibold text-gray-900 text-center">
-          Production Line System
+          Sistema de Producción de Líneas
         </h1>
+
+        {/* Subtitle */}
         <p className="text-sm text-gray-600 text-center mt-1">
-          Enter your credentials to continue
+          Ingrese sus credenciales para continuar
         </p>
 
         <form onSubmit={handleLogin} className="mt-6 space-y-4">
+          
+          {/* Username */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Username
+              Usuario
             </label>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter username"
+              placeholder="Ingrese usuario"
               className="w-full rounded-xl border border-gray-300 px-4 py-2
                          focus:outline-none focus:ring-2 focus:ring-gray-900/20"
               required
             />
           </div>
 
+          {/* Password */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Password
+              Contraseña
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
+              placeholder="Ingrese contraseña"
               className="w-full rounded-xl border border-gray-300 px-4 py-2
                          focus:outline-none focus:ring-2 focus:ring-gray-900/20"
               required
             />
           </div>
 
+          {/* Error */}
           {error && (
             <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
               {error}
             </div>
           )}
 
+          {/* Login Button */}
           <button
             type="submit"
             disabled={loading}
@@ -110,21 +120,24 @@ if (roleNorm === "lineleader") {
                        font-medium hover:bg-gray-800 active:bg-gray-900
                        disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Iniciando sesión..." : "Iniciar sesión"}
           </button>
         </form>
 
+        {/* Footer Note */}
         <div className="mt-6 text-xs text-gray-500 text-center">
-          Authorized users only. Contact system administrator for access.
+          Solo usuarios autorizados. Contacte al administrador del sistema para obtener acceso.
         </div>
-        
-        {/* Server status indicator (for debugging) */}
+
+        {/* Server Status */}
         <div className="mt-4 text-xs text-center">
-          <button 
-            onClick={() => window.open("http://localhost:5000/api/health", "_blank")}
+          <button
+            onClick={() =>
+              window.open("http://localhost:5000/api/health", "_blank")
+            }
             className="text-blue-500 hover:underline"
           >
-            Check server status
+            Verificar estado del servidor
           </button>
         </div>
       </div>

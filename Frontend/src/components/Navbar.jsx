@@ -5,18 +5,17 @@ export default function Navbar() {
   const [open, setOpen] = useState(false);
 
   const menu = [
-    { name: "Line Planner", path: "/planner" },
-    
-    { name: "Logout" , path: "/"}
+    { name: "Planificador de Línea", path: "/planner" },
+    { name: "Cerrar sesión", path: "/" }
   ];
 
   return (
     <nav className="bg-gray-900 text-white sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         
-        {/* Title */}
+        {/* Title / Brand */}
         <Link to="/" className="text-2xl font-bold">
-          Line Tracker
+          Seguimiento de Línea
         </Link>
 
         {/* Desktop Menu */}

@@ -239,11 +239,13 @@ export default function OperationPlanner({
   // ✅ SAVE OPERATORS & OPERATIONS (Step 2 data)
   const handleSaveOperations = async () => {
     if (!currentRunId) {
-      setSaveOpsMessage("❌ Please save Line Inputs (Step 1) first to get a Run ID");
+      setSaveOpsMessage(
+        "❌ Primero guarda los Datos de Línea (Paso 1) para obtener el ID de corrida"
+      );
       return;
     }
     if (computedRows.length === 0) {
-      setSaveOpsMessage("❌ No operation data to save");
+      setSaveOpsMessage("❌ No hay datos de operaciones para guardar");
       return;
     }
 
@@ -293,13 +295,13 @@ export default function OperationPlanner({
 
       if (data.success) {
         setSaveOpsMessage(
-          `✅ Saved ${data.operationsCount || operations.length} operations! Slot targets saved.`
+          `✅ Se guardaron ${data.operationsCount || operations.length} operaciones. ¡También se guardaron las metas por hora!`
         );
       } else {
         setSaveOpsMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setSaveOpsMessage(`❌ Failed to save operations: ${err.message}`);
+      setSaveOpsMessage(`❌ No se pudieron guardar las operaciones: ${err.message}`);
     } finally {
       setSavingOperations(false);
     }
@@ -310,9 +312,9 @@ export default function OperationPlanner({
       {/* HEADER */}
       <div className="px-5 py-4 border-b flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h2 className="font-semibold text-gray-900">Step 2 — Operators & Operations</h2>
+          <h2 className="font-semibold text-gray-900">Paso 2 — Operadores y Operaciones</h2>
           <p className="text-sm text-gray-600">
-            Operator tabs + accordion sections (mobile friendly).
+            Pestañas por operador + secciones tipo acordeón (ideal para celular).
           </p>
         </div>
 
@@ -321,15 +323,19 @@ export default function OperationPlanner({
           className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium
                      bg-gray-900 text-white hover:bg-gray-800 active:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={!hasReady}
-          title={!hasReady ? "Enter working hours + SAM + operators first" : "Add operator group"}
+          title={
+            !hasReady
+              ? "Primero captura horas trabajadas + SAM + operadores"
+              : "Agregar grupo de operador"
+          }
         >
-          + Add Operator
+          + Agregar operador
         </button>
       </div>
 
       {!hasReady ? (
         <div className="p-5 text-sm text-gray-600">
-          Please complete Step 1 (Operators, SAM, Working Hours). Then operations tracking will unlock.
+          Completa el Paso 1 (Operadores, SAM, Horas trabajadas). Después se habilitará el seguimiento de operaciones.
         </div>
       ) : (
         <>
@@ -337,7 +343,7 @@ export default function OperationPlanner({
           <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
             <div className="px-5 py-3">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-medium text-gray-600">Operators</div>
+                <div className="text-xs font-medium text-gray-600">Operadores</div>
 
                 <button
                   onClick={() =>
@@ -347,9 +353,9 @@ export default function OperationPlanner({
                   }
                   className="rounded-xl bg-gray-900 text-white px-3 py-2 text-sm font-medium
                              hover:bg-gray-800 active:bg-gray-900"
-                  title="Add operation to current operator"
+                  title="Agregar operación al operador actual"
                 >
-                  + Add Operation
+                  + Agregar operación
                 </button>
               </div>
 
@@ -359,7 +365,7 @@ export default function OperationPlanner({
               >
                 <span ref={(el) => (chipRefs.current["ALL"] = el)} className="shrink-0">
                   <Chip active={activeOperatorTab === "ALL"} onClick={() => setActiveOperatorTab("ALL")}>
-                    All
+                    Todos
                   </Chip>
                 </span>
 
@@ -384,14 +390,14 @@ export default function OperationPlanner({
                       active={activeOperatorTab === "UNASSIGNED"}
                       onClick={() => setActiveOperatorTab("UNASSIGNED")}
                     >
-                      Unassigned
+                      Sin asignar
                     </Chip>
                   </span>
                 ) : null}
               </div>
 
               <div className="text-[11px] text-gray-500">
-                Tap operator → that section expands automatically (accordion).
+                Toca un operador → su sección se abre automáticamente (acordeón).
               </div>
             </div>
           </div>
@@ -401,11 +407,11 @@ export default function OperationPlanner({
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-gray-900">
-                  Save Operators & Operations
+                  Guardar operadores y operaciones
                 </div>
                 <div className="text-xs text-gray-600">
-                  Save operator details, operations, and hourly targets.
-                  {!currentRunId && " (Save Step 1 first to get Run ID)"}
+                  Guarda datos del operador, operaciones y metas por hora.
+                  {!currentRunId && " (Primero guarda el Paso 1 para obtener el ID de corrida)"}
                 </div>
               </div>
 
@@ -416,7 +422,7 @@ export default function OperationPlanner({
                            bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800
                            disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {savingOperations ? "Saving..." : "💾 Save Step 2 Data"}
+                {savingOperations ? "Guardando..." : "💾 Guardar datos del Paso 2"}
               </button>
             </div>
 
@@ -439,13 +445,13 @@ export default function OperationPlanner({
           <div className="p-5 space-y-4">
             {groups.length === 0 ? (
               <div className="rounded-xl border bg-gray-50 p-4 text-sm text-gray-700">
-                No rows.
+                No hay filas.
               </div>
             ) : (
               groups.map((g) => {
                 const opKey = String(g.operatorNo);
                 const opNoLabel =
-                  opKey === "UNASSIGNED" ? "Unassigned" : `Operator ${opKey}`;
+                  opKey === "UNASSIGNED" ? "Sin asignar" : `Operador ${opKey}`;
 
                 const isOpen = expandedOperator === "ALL" || expandedOperator === opKey;
 
@@ -463,11 +469,13 @@ export default function OperationPlanner({
                     >
                       <div>
                         <div className="text-sm font-semibold text-gray-900">{opNoLabel}</div>
-                        <div className="text-xs text-gray-600">{g.rows.length} operation(s)</div>
+                        <div className="text-xs text-gray-600">
+                          {g.rows.length} operación(es)
+                        </div>
                       </div>
 
                       <div className="text-sm font-medium text-gray-700">
-                        {isOpen ? "Hide" : "Show"}
+                        {isOpen ? "Ocultar" : "Mostrar"}
                       </div>
                     </button>
 
@@ -481,64 +489,72 @@ export default function OperationPlanner({
                             className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium
                                        bg-white border border-gray-200 hover:bg-gray-50 active:bg-gray-100"
                           >
-                            + Add Operation
+                            + Agregar operación
                           </button>
                         </div>
 
                         {g.rows.map((row, idx) => (
-                          <div key={row.id} className="rounded-2xl border border-gray-200 overflow-hidden">
+                          <div
+                            key={row.id}
+                            className="rounded-2xl border border-gray-200 overflow-hidden"
+                          >
                             <div className="p-4 bg-white">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="text-sm font-semibold text-gray-900">
-                                  Operation {idx + 1}
+                                  Operación {idx + 1}
                                 </div>
+
                                 <button
                                   onClick={() => removeRow(row.id)}
                                   className="text-sm font-medium text-gray-700 hover:text-gray-900"
                                   disabled={rows.length === 1}
-                                  title={rows.length === 1 ? "At least one row required" : "Remove operation row"}
+                                  title={
+                                    rows.length === 1
+                                      ? "Se requiere al menos una fila"
+                                      : "Eliminar fila de operación"
+                                  }
                                 >
-                                  Remove
+                                  Quitar
                                 </button>
                               </div>
 
                               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
                                 <Field
-                                  label="Operator No"
-                                  placeholder="e.g., 1"
+                                  label="No. de operador"
+                                  placeholder="ej. 1"
                                   value={row.operatorNo}
                                   onChange={(v) => updateRow(row.id, { operatorNo: v })}
                                 />
 
                                 <Field
-                                  label="Operator Name (optional)"
-                                  placeholder="e.g., Juan / Maria"
+                                  label="Nombre del operador (opcional)"
+                                  placeholder="ej. Juan / María"
                                   value={row.operatorName}
                                   onChange={(v) => updateRow(row.id, { operatorName: v })}
                                 />
 
                                 <Field
-                                  label="Operation"
-                                  placeholder="e.g., Attach collar"
+                                  label="Operación"
+                                  placeholder="ej. Pegar cuello"
                                   value={row.operation}
                                   onChange={(v) => updateRow(row.id, { operation: v })}
                                 />
 
                                 <div className="rounded-xl border bg-gray-50 p-3">
-                                  <div className="text-xs text-gray-500">Capacity / Hour</div>
+                                  <div className="text-xs text-gray-500">Capacidad / hora</div>
                                   <div className="text-lg font-semibold text-gray-900">
                                     {row.capPerOperator ? row.capPerOperator.toFixed(2) : "0.00"}
                                   </div>
-                                  <div className="text-xs text-gray-500">Per operator</div>
+                                  <div className="text-xs text-gray-500">Por operador</div>
                                 </div>
                               </div>
 
                               <div className="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
-                                <Field label="t1 (sec)" value={row.t1} onChange={(v) => updateRow(row.id, { t1: v })} />
-                                <Field label="t2 (sec)" value={row.t2} onChange={(v) => updateRow(row.id, { t2: v })} />
-                                <Field label="t3 (sec)" value={row.t3} onChange={(v) => updateRow(row.id, { t3: v })} />
-                                <Field label="t4 (sec)" value={row.t4} onChange={(v) => updateRow(row.id, { t4: v })} />
-                                <Field label="t5 (sec)" value={row.t5} onChange={(v) => updateRow(row.id, { t5: v })} />
+                                <Field label="t1 (seg)" value={row.t1} onChange={(v) => updateRow(row.id, { t1: v })} />
+                                <Field label="t2 (seg)" value={row.t2} onChange={(v) => updateRow(row.id, { t2: v })} />
+                                <Field label="t3 (seg)" value={row.t3} onChange={(v) => updateRow(row.id, { t3: v })} />
+                                <Field label="t4 (seg)" value={row.t4} onChange={(v) => updateRow(row.id, { t4: v })} />
+                                <Field label="t5 (seg)" value={row.t5} onChange={(v) => updateRow(row.id, { t5: v })} />
                               </div>
                             </div>
                           </div>

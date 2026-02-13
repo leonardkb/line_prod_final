@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
-import { calcTargetFromSAM, safeNum } from "../utils/calc";
-import { buildShiftSlots } from "../utils/timeslots";
 import MetaSummary from "./MetaSummary";
-import OperationPlanner from "./OperationPlanner";
-import ViewEditOperationPlanner from './ViewEditOperationPlanner'; 
+import ViewEditOperationPlanner from "./ViewEditOperationPlanner";
 
 export default function SavedRunsViewer({ onBack }) {
   const [lineRuns, setLineRuns] = useState([]);
@@ -12,38 +9,38 @@ export default function SavedRunsViewer({ onBack }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [activePanel, setActivePanel] = useState("select"); // select, summary, operations
-  
-  // Load all saved line runs
+
+  // Cargar todas las corridas guardadas
   useEffect(() => {
     fetchLineRuns();
   }, []);
-  
+
   const fetchLineRuns = async () => {
     setLoading(true);
     try {
       const response = await fetch("http://localhost:5000/api/line-runs");
       const data = await response.json();
-      
+
       if (data.success) {
         setLineRuns(data.runs);
       } else {
         setMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ Failed to load runs: ${err.message}`);
+      setMessage(`❌ No se pudieron cargar las corridas: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
+
   const handleSelectRun = async (runId) => {
     setLoading(true);
     setMessage("");
-    
+
     try {
       const response = await fetch(`http://localhost:5000/api/run/${runId}`);
       const data = await response.json();
-      
+
       if (data.success) {
         setSelectedRun(runId);
         setRunData(data);
@@ -52,65 +49,63 @@ export default function SavedRunsViewer({ onBack }) {
         setMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ Failed to load run data: ${err.message}`);
+      setMessage(`❌ No se pudo cargar la corrida: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
-  // Refresh operations data without changing panel
+
+  // Refrescar datos (sin cambiar el panel)
   const refreshOperationsData = async () => {
     if (!selectedRun) return;
-    
+
     setLoading(true);
     try {
       const response = await fetch(`http://localhost:5000/api/run/${selectedRun}`);
       const data = await response.json();
-      
+
       if (data.success) {
-        setRunData(data); // Just update the data, don't change activePanel
+        setRunData(data);
       } else {
-        setMessage(`❌ Error refreshing data: ${data.error}`);
+        setMessage(`❌ Error al refrescar datos: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ Failed to refresh data: ${err.message}`);
+      setMessage(`❌ No se pudieron refrescar los datos: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
-  // Convert database slots to frontend format
+
+  // Convertir slots de BD a formato frontend
   const getSlotsFromData = () => {
     if (!runData?.slots) return [];
-    
-    return runData.slots.map(slot => ({
-      id: slot.slot_label, // Using label as ID
+
+    return runData.slots.map((slot) => ({
+      id: slot.slot_label, // usando label como ID
       label: slot.slot_label,
       hours: parseFloat(slot.planned_hours),
       startTime: slot.slot_start,
-      endTime: slot.slot_end
+      endTime: slot.slot_end,
     }));
   };
-  
-  // Convert database operations to frontend rows format
+
+  // Convertir operaciones de BD a formato rows del frontend
   const getRowsFromData = () => {
     if (!runData?.operations) return [];
-    
+
     const rows = [];
-    
-    runData.operations.forEach(opGroup => {
-      opGroup.operations.forEach(op => {
+
+    runData.operations.forEach((opGroup) => {
+      opGroup.operations.forEach((op) => {
         const stitched = {};
-        
-        // Map stitched data from database
+
+        // Mapear stitched data desde la BD
         if (op.stitched_data) {
           Object.entries(op.stitched_data).forEach(([slotLabel, qty]) => {
-            if (slotLabel) {
-              stitched[slotLabel] = qty;
-            }
+            if (slotLabel) stitched[slotLabel] = qty;
           });
         }
-        
+
         rows.push({
           id: `db_${op.id}`,
           operatorNo: opGroup.operator.operator_no.toString(),
@@ -122,174 +117,181 @@ export default function SavedRunsViewer({ onBack }) {
           t4: op.t4_sec?.toString() || "",
           t5: op.t5_sec?.toString() || "",
           capPerOperator: parseFloat(op.capacity_per_hour) || 0,
-          stitched
+          stitched,
         });
       });
     });
-    
+
     return rows;
   };
-  
-  // Get slot targets from data
+
+  // Metas por slot
   const getSlotTargets = () => {
     if (!runData?.slotTargets) return [];
-    return runData.slotTargets.map(st => parseFloat(st.slot_target) || 0);
+    return runData.slotTargets.map((st) => parseFloat(st.slot_target) || 0);
   };
-  
+
   const getCumulativeTargets = () => {
     if (!runData?.slotTargets) return [];
-    return runData.slotTargets.map(st => parseFloat(st.cumulative_target) || 0);
+    return runData.slotTargets.map((st) => parseFloat(st.cumulative_target) || 0);
   };
-  
-  // Update hourly data
+
+  // Actualizar datos por hora
   const handleUpdateHourlyData = async (rows) => {
     if (!selectedRun) return;
-    
+
     setLoading(true);
     setMessage("");
-    
+
     try {
       const slots = getSlotsFromData();
       const hourlyPayloads = [];
-      
-      rows.forEach(row => {
+
+      rows.forEach((row) => {
         if (row.stitched) {
-          slots.forEach(slot => {
+          slots.forEach((slot) => {
             const stitchedQty = row.stitched[slot.id];
             if (stitchedQty !== "" && stitchedQty !== null && stitchedQty !== undefined) {
               hourlyPayloads.push({
                 operatorNo: row.operatorNo,
                 operationName: row.operation,
                 slotLabel: slot.label,
-                stitchedQty: parseFloat(stitchedQty) || 0
+                stitchedQty: parseFloat(stitchedQty) || 0,
               });
             }
           });
         }
       });
-      
+
       if (hourlyPayloads.length === 0) {
-        setMessage("⚠️ No hourly data to update");
+        setMessage("⚠️ No hay datos por hora para actualizar");
         setLoading(false);
         return;
       }
-      
-      const response = await fetch(`http://localhost:5000/api/update-hourly-data/${selectedRun}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entries: hourlyPayloads })
-      });
-      
+
+      const response = await fetch(
+        `http://localhost:5000/api/update-hourly-data/${selectedRun}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entries: hourlyPayloads }),
+        }
+      );
+
       const data = await response.json();
-      
+
       if (data.success) {
-        setMessage(`✅ Updated ${data.savedCount + data.updatedCount} hourly entries`);
-        // Refresh ONLY the operations data without changing panel
+        setMessage(`✅ Se actualizaron ${data.savedCount + data.updatedCount} registros por hora`);
         await refreshOperationsData();
       } else {
         setMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ Failed to update hourly data: ${err.message}`);
+      setMessage(`❌ No se pudieron actualizar los datos por hora: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
+
   const handleAddOperation = async (operationData) => {
     if (!selectedRun) return;
-    
+
     setLoading(true);
     setMessage("");
-    
+
     try {
       const response = await fetch(`http://localhost:5000/api/add-operation/${selectedRun}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(operationData)
+        body: JSON.stringify(operationData),
       });
-      
+
       const data = await response.json();
-      
+
       if (data.success) {
-        setMessage("✅ Operation added successfully");
-        // Refresh ONLY the operations data without changing panel
+        setMessage("✅ Operación agregada correctamente");
         await refreshOperationsData();
       } else {
         setMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ Failed to add operation: ${err.message}`);
+      setMessage(`❌ No se pudo agregar la operación: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-600">Loading...</div>
+        <div className="text-gray-600">Cargando...</div>
       </div>
     );
   }
-  
+
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Encabezado */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">View Saved Runs</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Ver corridas guardadas</h1>
           <p className="text-sm text-gray-600">
-            Select a saved line run to view and update data
+            Selecciona una corrida guardada para ver y actualizar la información
           </p>
         </div>
         <button
           onClick={onBack}
           className="rounded-xl px-4 py-2 text-sm font-medium border border-gray-200 hover:bg-gray-50"
         >
-          ← Back to Planner
+          ← Regresar al planificador
         </button>
       </div>
-      
-      {/* Message Display */}
+
+      {/* Mensajes */}
       {message && (
-        <div className={`p-4 rounded-lg ${message.includes("✅") ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+        <div
+          className={`p-4 rounded-lg ${
+            message.includes("✅") ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+          }`}
+        >
           {message}
         </div>
       )}
-      
-      {/* Run Selection Panel */}
+
+      {/* Panel de selección */}
       {activePanel === "select" && (
         <div className="rounded-2xl border bg-white shadow-sm">
           <div className="px-5 py-4 border-b">
-            <h2 className="font-semibold text-gray-900">Select Line Run</h2>
+            <h2 className="font-semibold text-gray-900">Seleccionar corrida de línea</h2>
             <p className="text-sm text-gray-600">
-              Choose a saved production run to view and edit
+              Elige una corrida de producción guardada para ver y editar
             </p>
           </div>
-          
+
           <div className="p-5">
             {lineRuns.length === 0 ? (
               <div className="text-center py-8 text-gray-600">
-                No saved runs found. Save a run from the planner first.
+                No se encontraron corridas guardadas. Primero guarda una corrida desde el planificador.
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {lineRuns.map(run => (
-                  <div 
+                {lineRuns.map((run) => (
+                  <div
                     key={run.id}
                     onClick={() => handleSelectRun(run.id)}
                     className="rounded-xl border border-gray-200 p-4 hover:border-gray-300 hover:bg-gray-50 cursor-pointer transition"
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="font-semibold text-gray-900">{run.line_no}</div>
-                      <div className="text-xs text-gray-500">{new Date(run.run_date).toLocaleDateString()}</div>
+                      <div className="text-xs text-gray-500">
+                        {new Date(run.run_date).toLocaleDateString()}
+                      </div>
                     </div>
-                    <div className="text-sm text-gray-600 mb-1">Style: {run.style}</div>
-                    <div className="text-sm text-gray-600 mb-1">Operators: {run.operators_count}</div>
-                    <div className="text-sm text-gray-600">Target: {run.target_pcs} pcs</div>
+                    <div className="text-sm text-gray-600 mb-1">Estilo: {run.style}</div>
+                    <div className="text-sm text-gray-600 mb-1">Operadores: {run.operators_count}</div>
+                    <div className="text-sm text-gray-600">Meta: {run.target_pcs} pzas</div>
                     <div className="mt-3 text-xs text-gray-500">
-                      Created: {new Date(run.created_at).toLocaleString()}
+                      Creado: {new Date(run.created_at).toLocaleString()}
                     </div>
                   </div>
                 ))}
@@ -298,11 +300,11 @@ export default function SavedRunsViewer({ onBack }) {
           </div>
         </div>
       )}
-      
-      {/* Run Details View */}
+
+      {/* Vista de detalles */}
       {activePanel !== "select" && runData && (
         <div className="space-y-6">
-          {/* Run Info Header */}
+          {/* Encabezado de la corrida */}
           <div className="rounded-2xl border bg-white shadow-sm p-5">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
@@ -315,13 +317,13 @@ export default function SavedRunsViewer({ onBack }) {
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-600">
-                  <span>Operators: {runData.run.operators_count}</span>
-                  <span>Working Hours: {runData.run.working_hours}</span>
+                  <span>Operadores: {runData.run.operators_count}</span>
+                  <span>Horas trabajadas: {runData.run.working_hours}</span>
                   <span>SAM: {runData.run.sam_minutes} min</span>
-                  <span>Efficiency: {Math.round(runData.run.efficiency * 100)}%</span>
+                  <span>Eficiencia: {Math.round(runData.run.efficiency * 100)}%</span>
                 </div>
               </div>
-              
+
               <div className="flex gap-3">
                 <button
                   onClick={() => setActivePanel("summary")}
@@ -331,7 +333,7 @@ export default function SavedRunsViewer({ onBack }) {
                       : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
                   }`}
                 >
-                  Summary
+                  Resumen
                 </button>
                 <button
                   onClick={() => setActivePanel("operations")}
@@ -341,7 +343,7 @@ export default function SavedRunsViewer({ onBack }) {
                       : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
                   }`}
                 >
-                  Operations
+                  Operaciones
                 </button>
                 <button
                   onClick={() => {
@@ -351,17 +353,17 @@ export default function SavedRunsViewer({ onBack }) {
                   }}
                   className="rounded-xl px-4 py-2 text-sm font-medium border border-gray-200 hover:bg-gray-50"
                 >
-                  Back to List
+                  Regresar a la lista
                 </button>
               </div>
             </div>
           </div>
-          
-          {/* Meta Summary Panel */}
+
+          {/* Panel de resumen */}
           {activePanel === "summary" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="lg:col-span-2">
-                <MetaSummary 
+                <MetaSummary
                   header={{
                     line: runData.run.line_no,
                     date: runData.run.run_date,
@@ -369,76 +371,77 @@ export default function SavedRunsViewer({ onBack }) {
                     operators: runData.run.operators_count.toString(),
                     workingHours: runData.run.working_hours.toString(),
                     sam: runData.run.sam_minutes.toString(),
-                    efficiency: runData.run.efficiency
+                    efficiency: runData.run.efficiency,
                   }}
                   target={parseFloat(runData.run.target_pcs)}
                   slots={getSlotsFromData()}
                 />
               </div>
-              
-              {/* Operators List */}
+
+              {/* Lista de operadores */}
               <div className="rounded-2xl border bg-white shadow-sm">
                 <div className="px-5 py-4 border-b">
-                  <h2 className="font-semibold text-gray-900">Assigned Operators</h2>
+                  <h2 className="font-semibold text-gray-900">Operadores asignados</h2>
                   <p className="text-sm text-gray-600">
-                    {runData.operators?.length || 0} operators assigned
+                    {runData.operators?.length || 0} operador(es) asignado(s)
                   </p>
                 </div>
-                
+
                 <div className="p-5">
                   {runData.operators && runData.operators.length > 0 ? (
                     <div className="space-y-3">
-                      {runData.operators.map(operator => (
+                      {runData.operators.map((operator) => (
                         <div key={operator.id} className="rounded-lg border border-gray-200 p-4">
                           <div className="flex items-center justify-between mb-2">
                             <div className="font-semibold text-gray-900">
-                              Operator {operator.operator_no}
+                              Operador {operator.operator_no}
                             </div>
                             <div className="text-sm text-gray-600">
-                              {runData.operations
-                                .find(op => op.operator.id === operator.id)
-                                ?.operations.length || 0} operations
+                              {runData.operations.find((op) => op.operator.id === operator.id)
+                                ?.operations.length || 0}{" "}
+                              operaciones
                             </div>
                           </div>
+
                           {operator.operator_name && (
                             <div className="text-sm text-gray-600 mb-3">
-                              Name: {operator.operator_name}
+                              Nombre: {operator.operator_name}
                             </div>
                           )}
+
                           <button
                             onClick={() => setActivePanel("operations")}
                             className="text-sm text-blue-600 hover:text-blue-800"
                           >
-                            View Operations →
+                            Ver operaciones →
                           </button>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <div className="text-center py-8 text-gray-600">
-                      No operators assigned yet
+                      Todavía no hay operadores asignados
                     </div>
                   )}
                 </div>
               </div>
             </div>
           )}
-          
-          {/* Operations Panel */}
+
+          {/* Panel de operaciones */}
           {activePanel === "operations" && (
             <div>
               <div className="mb-4 rounded-2xl border bg-white shadow-sm p-5">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h2 className="font-semibold text-gray-900">Operations Management</h2>
+                    <h2 className="font-semibold text-gray-900">Administración de operaciones</h2>
                     <p className="text-sm text-gray-600">
-                      View and update operator operations and hourly output
+                      Consulta y actualiza las operaciones por operador y la producción por hora
                     </p>
                   </div>
                 </div>
               </div>
-              
-              {/* Modified OperationPlanner for View/Edit mode */}
+
               <ViewEditOperationPlanner
                 runId={selectedRun}
                 target={parseFloat(runData.run.target_pcs)}

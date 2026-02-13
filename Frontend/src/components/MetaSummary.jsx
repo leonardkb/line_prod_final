@@ -9,40 +9,53 @@ export default function MetaSummary({ header, target, slots }) {
 
   return (
     <div className="rounded-2xl border bg-white shadow-sm h-full">
+      
+      {/* Header */}
       <div className="px-5 py-4 border-b">
-        <h2 className="font-semibold text-gray-900">Meta Summary</h2>
+        <h2 className="font-semibold text-gray-900">
+          Resumen de Meta
+        </h2>
         <p className="text-sm text-gray-600">
-          Target is calculated using SAM and selected efficiency ({effPct}%).
+          La meta se calcula usando el SAM y la eficiencia seleccionada ({effPct}%).
         </p>
       </div>
 
       <div className="p-5 space-y-3">
-        <Row k="Line" v={header.line || "—"} />
-        <Row k="Date" v={header.date || "—"} />
-        <Row k="Style" v={header.style || "—"} />
+        
+        {/* Basic Info */}
+        <Row k="Línea" v={header.line || "—"} />
+        <Row k="Fecha" v={header.date || "—"} />
+        <Row k="Estilo" v={header.style || "—"} />
 
         <div className="my-3 h-px bg-gray-100" />
 
-        <Row k="Operators" v={header.operators || "—"} />
-        <Row k="SAM (min/piece)" v={header.sam || "—"} />
-        <Row k="Working Hours" v={header.workingHours || "—"} />
-        <Row k="Efficiency" v={`${effPct}%`} />
+        {/* Production Inputs */}
+        <Row k="Operadores" v={header.operators || "—"} />
+        <Row k="SAM (min/pieza)" v={header.sam || "—"} />
+        <Row k="Horas de Trabajo" v={header.workingHours || "—"} />
+        <Row k="Eficiencia" v={`${effPct}%`} />
 
         <div className="my-3 h-px bg-gray-100" />
 
+        {/* Target Card */}
         <div className="rounded-xl bg-gray-900 text-white p-4">
-          <div className="text-xs opacity-80">Meta / Target ({effPct}%)</div>
+          <div className="text-xs opacity-80">
+            Meta / Objetivo ({effPct}%)
+          </div>
+
           <div className="text-2xl font-semibold">
             {target ? target.toFixed(2) : "0.00"}
           </div>
+
           <div className="text-xs opacity-80 mt-1">
-            Per-hour target: {perHour ? perHour.toFixed(2) : "0.00"}
+            Meta por hora: {perHour ? perHour.toFixed(2) : "0.00"}
           </div>
         </div>
 
+        {/* Shift Distribution */}
         <div className="rounded-xl border bg-gray-50 p-3">
           <div className="text-xs font-medium text-gray-700 mb-2">
-            Shift Hours Distribution
+            Distribución de Horas del Turno
           </div>
 
           {slots?.length ? (
@@ -52,14 +65,18 @@ export default function MetaSummary({ header, target, slots }) {
                   key={s.id}
                   className="flex items-center justify-between rounded-lg bg-white border px-3 py-2"
                 >
-                  <span className="text-gray-700">{s.label}</span>
-                  <span className="font-medium text-gray-900">{s.hours}</span>
+                  <span className="text-gray-700">
+                    {s.label}
+                  </span>
+                  <span className="font-medium text-gray-900">
+                    {s.hours}
+                  </span>
                 </div>
               ))}
             </div>
           ) : (
             <div className="text-sm text-gray-600">
-              Enter working hours to generate slots.
+              Ingrese las horas de trabajo para generar los bloques.
             </div>
           )}
         </div>
@@ -67,6 +84,8 @@ export default function MetaSummary({ header, target, slots }) {
     </div>
   );
 }
+
+/* ---------- Row Helper ---------- */
 
 function Row({ k, v }) {
   return (
