@@ -12,6 +12,8 @@ export default function Dashboard() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [summary, setSummary] = useState(null);
   const [lineData, setLineData] = useState([]);
+  // NEW: State for line balancing assignments
+  const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
@@ -62,9 +64,11 @@ export default function Dashboard() {
     const headers = { Authorization: `Bearer ${token}` };
 
     try {
-      const [summaryRes, lineRes] = await Promise.all([
+      // NEW: Include assignments endpoint
+      const [summaryRes, lineRes, assignmentsRes] = await Promise.all([
         axios.get(`http://localhost:5000/api/supervisor/summary?date=${selectedDate}`, { headers }),
-        axios.get(`http://localhost:5000/api/supervisor/line-performance?date=${selectedDate}`, { headers })
+        axios.get(`http://localhost:5000/api/supervisor/line-performance?date=${selectedDate}`, { headers }),
+        axios.get(`http://localhost:5000/api/supervisor/assignments?date=${selectedDate}`, { headers })
       ]);
 
       if (summaryRes.data.success) {
@@ -72,6 +76,12 @@ export default function Dashboard() {
       }
       if (lineRes.data.success) {
         setLineData(lineRes.data.lines);
+      }
+      // NEW: Set assignments if successful
+      if (assignmentsRes.data.success) {
+        setAssignments(assignmentsRes.data.assignments);
+      } else {
+        setAssignments([]);
       }
     } catch (err) {
       console.error(err);
@@ -457,6 +467,43 @@ export default function Dashboard() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* NEW: Assignments Table */}
+        {!loading && assignments.length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Contribuciones de ayuda</h2>
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      <th className="px-4 py-3 text-left">Línea</th>
+                      <th className="px-4 py-3 text-left">Operador lento</th>
+                      <th className="px-4 py-3 text-left">Ayudado por</th>
+                      <th className="px-4 py-3 text-left">Piezas ayudadas (total)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignments.map((a, idx) => (
+                      <tr key={idx} className="border-t">
+                        <td className="px-4 py-3 font-medium">Línea {a.line_no}</td>
+                        <td className="px-4 py-3">
+                          Op. {a.source_operator_no}{" "}
+                          {a.source_operator_name ? `(${a.source_operator_name})` : ""}
+                        </td>
+                        <td className="px-4 py-3">
+                          Op. {a.target_operator_no}{" "}
+                          {a.target_operator_name ? `(${a.target_operator_name})` : ""}
+                        </td>
+                        <td className="px-4 py-3">{Math.round(a.total_helped_pieces)} pcs</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}

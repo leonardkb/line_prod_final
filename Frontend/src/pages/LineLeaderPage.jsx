@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import MetaSummary from "../components/MetaSummary";
 import NavBarline from "../components/NavBarline";
@@ -268,8 +268,10 @@ export default function LineLeaderPage() {
 
   const [latest, setLatest] = useState(null);
   const [runData, setRunData] = useState(null);
-
   const [sewedInputs, setSewedInputs] = useState({});
+
+  // NEW: State for line balancing assignments
+  const [assignments, setAssignments] = useState([]);
 
   // Filters
   const [search, setSearch] = useState("");
@@ -285,6 +287,9 @@ export default function LineLeaderPage() {
       return null;
     }
   }, []);
+
+  // Get token for authenticated requests
+  const token = localStorage.getItem("token");
 
   useEffect(() => {
     alarmSoundRef.current = new Audio(
@@ -418,6 +423,8 @@ export default function LineLeaderPage() {
 
       if (json?.run?.id) {
         await fetchRunData(json.run.id);
+        // NEW: Fetch assignments after run data is loaded
+        await fetchAssignments(json.run.id);
       } else {
         setErrMsg("Se encontró la última corrida pero falta el ID de la corrida.");
       }
@@ -470,6 +477,20 @@ export default function LineLeaderPage() {
       setApplyOpByOperatorId((prev) => ({ ...applyInit, ...prev }));
     } catch (e) {
       setErrMsg(e.message || "Error de red al cargar los detalles de la corrida");
+    }
+  }
+
+  // NEW: Fetch assignments for the current run
+  async function fetchAssignments(runId) {
+    try {
+      const res = await fetch(`http://localhost:5000/api/lineleader/assignments/${runId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (json.success) setAssignments(json.assignments);
+    } catch (e) {
+      console.error("Error fetching assignments:", e);
+      // Don't show error to user; it's non‑critical
     }
   }
 
@@ -534,15 +555,87 @@ export default function LineLeaderPage() {
       .filter((b) => (b.operations || []).length > 0);
   }, [runData, operatorFilter, search]);
 
-  function setSewed(opId, slotLabel, value) {
-    setSewedInputs((prev) => ({
-      ...prev,
-      [opId]: {
-        ...(prev[opId] || {}),
-        [slotLabel]: value,
-      },
-    }));
-  }
+  // ========== SYNCHRONIZATION LOGIC ==========
+  // Map operationId -> operatorId
+  const operationToOperatorMap = useMemo(() => {
+    const map = new Map();
+    if (runData?.operations) {
+      runData.operations.forEach(block => {
+        const operatorId = block.operator?.id;
+        if (operatorId) {
+          block.operations?.forEach(op => map.set(op.id, operatorId));
+        }
+      });
+    }
+    return map;
+  }, [runData]);
+
+  // Map operatorId -> array of operationIds
+  const operatorToOperationIds = useMemo(() => {
+    const map = new Map();
+    if (runData?.operations) {
+      runData.operations.forEach(block => {
+        const operatorId = block.operator?.id;
+        if (operatorId) {
+          const opIds = block.operations?.map(op => op.id) || [];
+          map.set(operatorId, opIds);
+        }
+      });
+    }
+    return map;
+  }, [runData]);
+
+  // Synchronized update function
+  const handleSewedChange = useCallback((opId, slotLabel, value) => {
+    setSewedInputs(prev => {
+      const operatorId = operationToOperatorMap.get(opId);
+      // No operator → update only this operation
+      if (!operatorId) {
+        return {
+          ...prev,
+          [opId]: {
+            ...(prev[opId] || {}),
+            [slotLabel]: value,
+          },
+        };
+      }
+
+      const affectedOpIds = operatorToOperationIds.get(operatorId) || [];
+      const newState = { ...prev };
+      affectedOpIds.forEach(id => {
+        newState[id] = {
+          ...(newState[id] || {}),
+          [slotLabel]: value,
+        };
+      });
+      return newState;
+    });
+  }, [operationToOperatorMap, operatorToOperationIds]);
+
+  // Optional: Normalize initial data so all operations of an operator share the same values
+  useEffect(() => {
+    if (!runData || !operatorToOperationIds.size) return;
+
+    setSewedInputs(prev => {
+      let changed = false;
+      const newState = { ...prev };
+      for (const [operatorId, opIds] of operatorToOperationIds.entries()) {
+        if (opIds.length <= 1) continue;
+        const firstOpId = opIds[0];
+        const firstOpData = prev[firstOpId] || {};
+        // Make all other operations match the first one
+        opIds.slice(1).forEach(id => {
+          if (JSON.stringify(prev[id]) !== JSON.stringify(firstOpData)) {
+            newState[id] = { ...firstOpData };
+            changed = true;
+          }
+        });
+      }
+      return changed ? newState : prev;
+    });
+  }, [runData, operatorToOperationIds]);
+
+  // ============================================
 
   function resetFilters() {
     setSearch("");
@@ -556,14 +649,30 @@ export default function LineLeaderPage() {
     }));
   }
 
+  // ========== CORRECTED GLOBAL TOTAL ==========
   const totalSewed = useMemo(() => {
-    let sum = 0;
-    for (const opId of Object.keys(sewedInputs || {})) {
-      const bySlot = sewedInputs[opId] || {};
-      for (const sl of Object.keys(bySlot)) sum += safeNum(bySlot[sl]);
+    const operatorSeen = new Set();   // operator IDs already counted
+    let total = 0;
+
+    for (const [opId, opData] of Object.entries(sewedInputs)) {
+      const operatorId = operationToOperatorMap.get(opId);
+      if (!operatorId) {
+        // Unassigned operation: count it directly
+        for (const slotLabel of Object.keys(opData)) {
+          total += safeNum(opData[slotLabel]);
+        }
+      } else {
+        // Assigned operator: count only the first operation we encounter for this operator
+        if (!operatorSeen.has(operatorId)) {
+          operatorSeen.add(operatorId);
+          for (const slotLabel of Object.keys(opData)) {
+            total += safeNum(opData[slotLabel]);
+          }
+        }
+      }
     }
-    return sum;
-  }, [sewedInputs]);
+    return total;
+  }, [sewedInputs, operationToOperatorMap]);
 
   const getSelectedOperationData = useMemo(() => {
     return (block) => {
@@ -635,6 +744,8 @@ export default function LineLeaderPage() {
 
       setSaveMsg("✅ Actualizaciones por hora guardadas");
       await fetchRunData(runId);
+      // Optionally refresh assignments after save
+      await fetchAssignments(runId);
     } catch (e) {
       setErrMsg(e.message || "Error de red al guardar");
     } finally {
@@ -729,7 +840,43 @@ export default function LineLeaderPage() {
               {errMsg}
             </div>
           ) : tab === "summary" ? (
-            <MetaSummary header={header} target={target} slots={slotsForSummary} />
+            <>
+              <MetaSummary header={header} target={target} slots={slotsForSummary} />
+              {/* NEW: Display assignments if any */}
+              {assignments.length > 0 && (
+                <div className="mt-6 rounded-3xl border bg-white shadow-sm p-6">
+                  <h2 className="text-lg font-semibold mb-4">Asignaciones de ayuda</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="px-4 py-2 text-left">Operador lento</th>
+                          <th className="px-4 py-2 text-left">Operación</th>
+                          <th className="px-4 py-2 text-left">Ayudado por</th>
+                          <th className="px-4 py-2 text-left">Cantidad por hora</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {assignments.map((a) => (
+                          <tr key={a.id} className="border-t">
+                            <td className="px-4 py-2">
+                              Op. {a.source_operator_no}{" "}
+                              {a.source_operator_name ? `(${a.source_operator_name})` : ""}
+                            </td>
+                            <td className="px-4 py-2">{a.operation_name}</td>
+                            <td className="px-4 py-2">
+                              Op. {a.target_operator_no}{" "}
+                              {a.target_operator_name ? `(${a.target_operator_name})` : ""}
+                            </td>
+                            <td className="px-4 py-2">{a.assigned_quantity_per_hour} pcs/h</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <>
               <div className="mt-4 rounded-3xl border bg-white shadow-sm p-6">
@@ -820,8 +967,10 @@ export default function LineLeaderPage() {
                     const selectedOperationSewedData = getOperationSewedData(selectedOperationId);
                     const selectedOperationTotal = getOperationTotal(selectedOperationId);
 
-                    const operatorTotal =
-                      block.operations?.reduce((sum, op) => sum + getOperationTotal(op.id), 0) || 0;
+                    // Operator total = total of first operation (all are the same)
+                    const operatorTotal = block.operations?.length
+                      ? getOperationTotal(block.operations[0].id)
+                      : 0;
 
                     return (
                       <div
@@ -839,15 +988,12 @@ export default function LineLeaderPage() {
                               <span className="font-medium">{operatorName || "-"}</span>
                             </div>
                             <div className="mt-2 text-sm text-gray-700">
-                              Total cosido (todas las operaciones):{" "}
+                              Total piezas producidas:{" "}
                               <span className="font-semibold">{operatorTotal}</span>
                             </div>
                             {selectedOperation && (
                               <div className="mt-1 text-sm text-gray-700">
-                                Total de la operación seleccionada:{" "}
-                                <span className="font-semibold text-blue-600">
-                                  {selectedOperationTotal}
-                                </span>
+                                (Operación seleccionada: {selectedOperationTotal})
                               </div>
                             )}
                           </div>
@@ -898,7 +1044,7 @@ export default function LineLeaderPage() {
                                 sewedBySlot={selectedOperationSewedData}
                                 onChangeSewed={(slotLabel, nextValue) => {
                                   if (!selectedOperationId) return;
-                                  setSewed(selectedOperationId, slotLabel, nextValue);
+                                  handleSewedChange(selectedOperationId, slotLabel, nextValue);
                                 }}
                                 operationName={selectedOperationName}
                               />

@@ -6,7 +6,8 @@ export default function Navbar() {
 
   const menu = [
     { name: "Planificador de Línea", path: "/planner" },
-    { name: "Cerrar sesión", path: "/" }
+    { name: "Cerrar sesión", path: "/" },
+    { name: "Line Balance", path: "/line-balancing" },
   ];
 
   return (

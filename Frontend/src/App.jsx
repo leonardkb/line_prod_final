@@ -10,6 +10,7 @@ import LineInfo from "./pages/LineInfo";
 import AdminDashboard from "./pages/AdminDashboard";
 import LineLeaderPage from "./pages/LineLeaderPage";
 import Dashboard from "./pages/Dashboard";
+import LineBalancing from "./pages/LineBalancing";
 
 
 
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="/admin-dashboard" element={<AdminDashboard />} />
          <Route path="/admin" element={<Dashboard />} />
         <Route path="/lineleader" element={<LineLeaderPage />} />
+        <Route path="/line-balancing" element={<LineBalancing />} /> {/* catch-all route */}
       </Routes>
     </Router>
   );

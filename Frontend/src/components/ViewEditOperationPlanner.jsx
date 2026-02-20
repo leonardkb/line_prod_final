@@ -75,7 +75,7 @@ export default function ViewEditOperationPlanner({
     });
   }, [computedRows, operatorFilterNo, searchText]);
 
-  // Agrupar por operador
+  // Agrupar por operador (solo filas visibles)
   const groups = useMemo(() => {
     const map = new Map();
     visibleRows.forEach((r) => {
@@ -90,21 +90,42 @@ export default function ViewEditOperationPlanner({
       return Number(a) - Number(b);
     });
 
-    return keys.map((k) => ({ operatorNo: k, rows: map.get(k) }));
-  }, [visibleRows]);
+    return keys.map((k) => {
+      const rows = map.get(k);
+      // Para operadores asignados, usamos la primera fila como referencia (todas compartirán el mismo stitched)
+      const firstRow = rows[0];
+      const operatorTotal = firstRow ? sumStitchedForRow(firstRow, slots) : 0;
+      const perHourTotals = (slots || []).map((s) =>
+        firstRow ? sumStitchedForRowAtSlot(firstRow, s.id) : 0
+      );
+      return { operatorNo: k, rows, operatorTotal, perHourTotals };
+    });
+  }, [visibleRows, slots]);
 
+  // Actualizar stitched: si el operador tiene número, se sincronizan todas sus filas
   const updateRowStitched = (rowId, slotId, value) => {
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.id === rowId) {
-          return {
-            ...row,
-            stitched: { ...row.stitched, [slotId]: value },
-          };
+    setRows((prev) => {
+      const targetRow = prev.find((r) => r.id === rowId);
+      if (!targetRow) return prev;
+      const operatorNo = normalizeNo(targetRow.operatorNo);
+
+      // Sin número de operador → solo actualizar esa fila
+      if (!operatorNo) {
+        return prev.map((row) =>
+          row.id === rowId
+            ? { ...row, stitched: { ...row.stitched, [slotId]: value } }
+            : row
+        );
+      }
+
+      // Con número → actualizar TODAS las filas del mismo operador
+      return prev.map((row) => {
+        if (normalizeNo(row.operatorNo) === operatorNo) {
+          return { ...row, stitched: { ...row.stitched, [slotId]: value } };
         }
         return row;
-      })
-    );
+      });
+    });
   };
 
   const handleSaveHourlyUpdates = async () => {
@@ -131,14 +152,33 @@ export default function ViewEditOperationPlanner({
     }
   };
 
+  // Total general (sin duplicar operadores con varias operaciones)
   const totalStitched = useMemo(() => {
-    return computedRows.reduce((total, row) => {
-      let rowTotal = 0;
-      Object.values(row.stitched || {}).forEach((val) => {
-        if (val && !isNaN(val)) rowTotal += Number(val);
-      });
-      return total + rowTotal;
-    }, 0);
+    const operatorMap = new Map();
+
+    const getRowTotal = (row) =>
+      Object.values(row.stitched || {}).reduce(
+        (sum, v) => sum + (Number.isFinite(Number(v)) ? Number(v) : 0),
+        0
+      );
+
+    computedRows.forEach((row) => {
+      const opNo = normalizeNo(row.operatorNo);
+      const rowTotal = getRowTotal(row);
+
+      if (opNo) {
+        // Solo guardamos el primer valor del operador
+        if (!operatorMap.has(opNo)) {
+          operatorMap.set(opNo, rowTotal);
+        }
+        // Si el operador ya está, ignoramos las demás filas (para no duplicar)
+      } else {
+        // Sin asignar → cada fila cuenta por separado
+        operatorMap.set(`unassigned-${row.id}`, rowTotal);
+      }
+    });
+
+    return Array.from(operatorMap.values()).reduce((sum, val) => sum + val, 0);
   }, [computedRows]);
 
   return (
@@ -225,17 +265,6 @@ export default function ViewEditOperationPlanner({
             const opNoLabel =
               g.operatorNo === "UNASSIGNED" ? "Sin asignar" : `Operador ${g.operatorNo}`;
 
-            // Total del operador (todas las operaciones)
-            const operatorTotal = g.rows.reduce(
-              (total, row) => total + sumStitchedForRow(row, slots),
-              0
-            );
-
-            // Totales por hora de este operador (sumando sus operaciones)
-            const perHourTotals = (slots || []).map((s) =>
-              g.rows.reduce((acc, r) => acc + sumStitchedForRowAtSlot(r, s.id), 0)
-            );
-
             return (
               <div
                 key={g.operatorNo}
@@ -251,18 +280,18 @@ export default function ViewEditOperationPlanner({
                   </div>
 
                   <div className="text-sm text-gray-600 mb-3">
-                    Total cosido (todas las operaciones):{" "}
-                    <span className="font-semibold">{operatorTotal}</span>
+                    Total piezas producidas (todas las operaciones):{" "}
+                    <span className="font-semibold">{g.operatorTotal}</span>
                   </div>
 
-                  {/* Totales por hora del operador */}
+                  {/* Totales por hora del operador (valor común) */}
                   {slots?.length > 0 && (
                     <div className="grid grid-cols-10 gap-1">
                       {slots.map((s, i) => (
                         <div key={s.id} className="text-center">
                           <div className="text-xs text-gray-500 font-medium mb-1">{s.label}</div>
                           <div className="text-sm font-semibold text-gray-900 bg-white rounded border px-1 py-0.5">
-                            {perHourTotals[i]}
+                            {g.perHourTotals[i]}
                           </div>
                         </div>
                       ))}

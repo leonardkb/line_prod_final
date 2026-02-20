@@ -273,11 +273,15 @@ export default function AdminDashboard() {
       const operatorsCount = data.operators?.length || 0;
       const targetPcs = Number(data.run?.target_pcs || 0);
 
+      // --- DEDUPED TOTAL SEWED FOR SUMMARY CARDS ---
       let totalSewed = 0;
+      const countedOperators = new Set(); // track operators already counted
+
       const operatorData = [];
 
       (data.operations || []).forEach((operatorGroup) => {
         const operator = operatorGroup.operator;
+        const operatorNo = operator.operator_no;
 
         (operatorGroup.operations || []).forEach((operation) => {
           const sewedData = operation.sewed_data || {};
@@ -286,7 +290,11 @@ export default function AdminDashboard() {
             operationSewed += parseFloat(qty) || 0;
           });
 
-          totalSewed += operationSewed;
+          // Add to totalSewed only once per operator
+          if (!countedOperators.has(operatorNo)) {
+            totalSewed += operationSewed;
+            countedOperators.add(operatorNo);
+          }
 
           const stitchedData = operation.stitched_data || {};
           let operationPlanned = 0;
@@ -320,7 +328,7 @@ export default function AdminDashboard() {
         style: data.run.style,
         operatorsCount,
         totalTarget: targetPcs,
-        totalSewed,
+        totalSewed,                    // ✅ now deduped
         workingHours: data.run.working_hours,
         sam: data.run.sam_minutes,
         efficiency: Number(data.run.efficiency || 0) * 100,
