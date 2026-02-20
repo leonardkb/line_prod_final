@@ -139,6 +139,7 @@ export default function LoginPage() {
           >
             Verificar estado del servidor
           </button>
+          <h12 className="block mt-1 text-gray-400">developed by Leonard</h12>
         </div>
       </div>
     </div>
