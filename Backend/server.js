@@ -17,7 +17,7 @@ const pool = new Pool({
   ssl: false,
   max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000
+  connectionTimeoutMillis: 5000,
 });
 
 // Helper function to set schema for a client connection
@@ -30,9 +30,9 @@ const createAllTables = async () => {
   const client = await pool.connect();
   try {
     console.log("🔄 Creating/verifying database tables in prod_db_schema...");
-    
+
     await setSchema(client);
-    
+
     // 0. Create users table
     await client.query(`
       CREATE TABLE IF NOT EXISTS users(
@@ -50,7 +50,7 @@ const createAllTables = async () => {
       );
     `);
     console.log("✅ users table ready in prod_db_schema");
-    
+
     // 1. Create line_runs table
     await client.query(`
       CREATE TABLE IF NOT EXISTS line_runs(
@@ -155,7 +155,21 @@ const createAllTables = async () => {
       );
     `);
     console.log("✅ operation_sewed_entries table ready in prod_db_schema");
-
+// 7 Create line_balancing_assignments table
+await client.query(`
+  CREATE TABLE IF NOT EXISTS line_balancing_assignments (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES line_runs(id) ON DELETE CASCADE,
+    source_operator_id BIGINT NOT NULL REFERENCES run_operators(id) ON DELETE CASCADE,
+    target_operator_id BIGINT NOT NULL REFERENCES run_operators(id) ON DELETE CASCADE,
+    operation_id BIGINT NOT NULL REFERENCES operator_operations(id) ON DELETE CASCADE,
+    assigned_quantity_per_hour NUMERIC(12,2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (run_id, source_operator_id, target_operator_id, operation_id)
+  );
+`);
+console.log("✅ line_balancing_assignments table ready in prod_db_schema");
     // 6. Create slot_targets table
     await client.query(`
       CREATE TABLE IF NOT EXISTS slot_targets(
@@ -168,8 +182,11 @@ const createAllTables = async () => {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         UNIQUE (run_id, slot_id)
       );
+      
     `);
     console.log("✅ slot_targets table ready in prod_db_schema");
+
+    
 
     // Create indexes
     await client.query("CREATE INDEX IF NOT EXISTS idx_sewed_run ON operation_sewed_entries(run_id);");
@@ -184,9 +201,9 @@ const createAllTables = async () => {
     await client.query("CREATE INDEX IF NOT EXISTS idx_hourly_entries_run ON operation_hourly_entries(run_id);");
     await client.query("CREATE INDEX IF NOT EXISTS idx_hourly_entries_operation ON operation_hourly_entries(operation_id);");
     await client.query("CREATE INDEX IF NOT EXISTS idx_hourly_entries_slot ON operation_hourly_entries(slot_id);");
-    
+
     console.log("✅ All tables and indexes created successfully in prod_db_schema");
-    
+
     // Create default users if they don't exist
     await createDefaultUsers(client);
   } catch (err) {
@@ -201,81 +218,76 @@ const createAllTables = async () => {
 const createDefaultUsers = async (client) => {
   try {
     console.log("🔄 Creating default users in prod_db_schema...");
-    
+
     const defaultUsers = [
       {
-        username: 'engineer',
-        password: 'engineer',
-        role: 'engineer',
-        full_name: 'System Engineer'
-      }
+        username: "engineer",
+        password: "engineer",
+        role: "engineer",
+        full_name: "System Engineer",
+      },
     ];
-    
+
     // Add line leaders 1-26
     for (let i = 1; i <= 26; i++) {
       defaultUsers.push({
         username: `line${i}`,
         password: `line${i}`,
-        role: 'line_leader',
+        role: "line_leader",
         line_number: i,
-        full_name: `Line ${i} Leader`
+        full_name: `Line ${i} Leader`,
       });
     }
-    
+
     // Add a supervisor
     defaultUsers.push({
-      username: 'supervisor',
-      password: 'supervisor123',
-      role: 'supervisor',
-      full_name: 'Production Supervisor'
+      username: "supervisor",
+      password: "supervisor123",
+      role: "supervisor",
+      full_name: "Production Supervisor",
     });
-    
+
     let createdCount = 0;
     let updatedCount = 0;
-    
+
     for (const user of defaultUsers) {
       // Check if user exists
-      const existingUser = await client.query(
-        'SELECT id FROM users WHERE username = $1',
-        [user.username]
-      );
-      
+      const existingUser = await client.query("SELECT id FROM users WHERE username = $1", [user.username]);
+
       if (existingUser.rows.length === 0) {
         // Hash password
         const saltRounds = 10;
         const passwordHash = await bcrypt.hash(user.password, saltRounds);
-        
+
         // Insert new user
-        await client.query(`
+        await client.query(
+          `
           INSERT INTO users (username, password_hash, role, line_number, full_name, is_active)
           VALUES ($1, $2, $3, $4, $5, $6)
-        `, [
-          user.username,
-          passwordHash,
-          user.role,
-          user.line_number || null,
-          user.full_name || user.username,
-          true
-        ]);
+        `,
+          [user.username, passwordHash, user.role, user.line_number || null, user.full_name || user.username, true]
+        );
         createdCount++;
         console.log(`✅ Created user: ${user.username} (${user.role})`);
       } else {
         // Update existing user's password if needed
         const saltRounds = 10;
         const passwordHash = await bcrypt.hash(user.password, saltRounds);
-        
-        await client.query(`
+
+        await client.query(
+          `
           UPDATE users 
           SET password_hash = $1, updated_at = NOW()
           WHERE username = $2
-        `, [passwordHash, user.username]);
+        `,
+          [passwordHash, user.username]
+        );
         updatedCount++;
         console.log(`✅ Updated user: ${user.username}`);
       }
     }
-    
+
     console.log(`✅ Users ready: ${createdCount} created, ${updatedCount} updated`);
-    
   } catch (err) {
     console.error("❌ Error creating default users:", err.message);
   }
@@ -286,60 +298,62 @@ app.post("/api/login", async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { username, password } = req.body;
-    
+
     if (!username || !password) {
       return res.status(400).json({
         success: false,
-        error: "Username and password are required"
+        error: "Username and password are required",
       });
     }
-    
+
     // Find user
-    const userResult = await client.query(`
+    const userResult = await client.query(
+      `
       SELECT id, username, password_hash, role, line_number, full_name, is_active
       FROM users 
       WHERE username = $1 AND is_active = TRUE
-    `, [username]);
-    
+    `,
+      [username]
+    );
+
     if (userResult.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        error: "Invalid username or password"
+        error: "Invalid username or password",
       });
     }
-    
+
     const user = userResult.rows[0];
-    
+
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
-    
+
     if (!isValidPassword) {
       return res.status(401).json({
         success: false,
-        error: "Invalid username or password"
+        error: "Invalid username or password",
       });
     }
-    
+
     // Remove password hash from response
     delete user.password_hash;
-    
+
     // Generate a simple token (in production, use JWT)
-    const token = Buffer.from(`${user.id}:${Date.now()}`).toString('base64');
-    
+    const token = Buffer.from(`${user.id}:${Date.now()}`).toString("base64");
+
     res.json({
       success: true,
       message: "Login successful",
       user: user,
-      token: token
+      token: token,
     });
-    
   } catch (err) {
     console.error("❌ Login error:", err.message);
     res.status(500).json({
       success: false,
-      error: "Internal server error"
+      error: "Internal server error",
     });
   } finally {
     client.release();
@@ -351,53 +365,56 @@ const authenticateToken = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-    
+
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1]; // Bearer TOKEN
+
     if (!token) {
       return res.status(401).json({
         success: false,
-        error: "Authentication required"
+        error: "Authentication required",
       });
     }
-    
+
     // Simple token validation
-    const decoded = Buffer.from(token, 'base64').toString('ascii');
-    const [userId, timestamp] = decoded.split(':');
-    
+    const decoded = Buffer.from(token, "base64").toString("ascii");
+    const [userId, timestamp] = decoded.split(":");
+
     // Check if token is not too old (24 hours)
     const tokenAge = Date.now() - parseInt(timestamp);
     const MAX_TOKEN_AGE = 24 * 60 * 60 * 1000; // 24 hours
-    
+
     if (tokenAge > MAX_TOKEN_AGE) {
       return res.status(401).json({
         success: false,
-        error: "Session expired"
+        error: "Session expired",
       });
     }
-    
+
     // Verify user exists and is active
-    const userResult = await client.query(`
+    const userResult = await client.query(
+      `
       SELECT id, username, role, line_number, full_name
       FROM users 
       WHERE id = $1 AND is_active = TRUE
-    `, [parseInt(userId)]);
-    
+    `,
+      [parseInt(userId)]
+    );
+
     if (userResult.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        error: "User not found or inactive"
+        error: "User not found or inactive",
       });
     }
-    
+
     req.user = userResult.rows[0];
     next();
   } catch (err) {
     console.error("❌ Authentication error:", err.message);
     res.status(401).json({
       success: false,
-      error: "Invalid authentication token"
+      error: "Invalid authentication token",
     });
   } finally {
     client.release();
@@ -408,7 +425,7 @@ const authenticateToken = async (req, res, next) => {
 app.get("/api/me", authenticateToken, async (req, res) => {
   res.json({
     success: true,
-    user: req.user
+    user: req.user,
   });
 });
 
@@ -416,25 +433,25 @@ app.get("/api/me", authenticateToken, async (req, res) => {
 app.post("/api/logout", (req, res) => {
   res.json({
     success: true,
-    message: "Logged out successfully"
+    message: "Logged out successfully",
   });
 });
 
 // ✅ Save line inputs and shift slots together (Step 1)
 app.post("/api/save-production", async (req, res) => {
   const client = await pool.connect();
-  
+
   try {
     await setSchema(client);
     await client.query("BEGIN");
-    
+
     const { line, date, style, operators, workingHours, sam, efficiency, target, targetPerHour, slots } = req.body;
 
     // Validate required fields
     if (!line || !date || !style || !operators || !workingHours || !sam) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing required fields" 
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields",
       });
     }
 
@@ -466,7 +483,7 @@ app.post("/api/save-production", async (req, res) => {
       parseFloat(sam),
       parseFloat(efficiency) || 0.7,
       parseFloat(target) || 0,
-      parseFloat(targetPerHour) || 0
+      parseFloat(targetPerHour) || 0,
     ]);
 
     const runId = lineRunResult.rows[0].id;
@@ -496,28 +513,28 @@ app.post("/api/save-production", async (req, res) => {
           slot.label,
           slot.startTime || null,
           slot.endTime || null,
-          parseFloat(slot.hours) || 0
+          parseFloat(slot.hours) || 0,
         ]);
-        
+
         slotIds[slot.label] = slotResult.rows[0].id;
       }
       console.log(`✅ ${slots.length} shift slots saved for line run ${runId}`);
     }
 
     await client.query("COMMIT");
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Production data saved successfully in prod_db_schema",
       lineRunId: runId,
-      slotIds
+      slotIds,
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error saving production data:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -527,35 +544,27 @@ app.post("/api/save-production", async (req, res) => {
 // ✅ Save operators and operations (Step 2)
 app.post("/api/save-operations", async (req, res) => {
   const client = await pool.connect();
-  
+
   try {
     await setSchema(client);
     await client.query("BEGIN");
-    
-    const { 
-      runId, 
-      operations, 
-      slotTargets, 
-      cumulativeTargets 
-    } = req.body;
+
+    const { runId, operations, slotTargets, cumulativeTargets } = req.body;
 
     if (!runId || !operations || !Array.isArray(operations)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing required data" 
+      return res.status(400).json({
+        success: false,
+        error: "Missing required data",
       });
     }
 
     // Verify run exists
-    const runCheck = await client.query(
-      "SELECT id FROM line_runs WHERE id = $1",
-      [runId]
-    );
-    
+    const runCheck = await client.query("SELECT id FROM line_runs WHERE id = $1", [runId]);
+
     if (runCheck.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Line run not found" 
+      return res.status(404).json({
+        success: false,
+        error: "Line run not found",
       });
     }
 
@@ -564,24 +573,18 @@ app.post("/api/save-operations", async (req, res) => {
       "SELECT id, slot_label FROM shift_slots WHERE run_id = $1 ORDER BY slot_order",
       [runId]
     );
-    
+
     const slotMap = {};
-    slotsResult.rows.forEach(slot => {
+    slotsResult.rows.forEach((slot) => {
       slotMap[slot.slot_label] = slot.id;
     });
 
     // Process each operation row
     const operatorMap = {};
     let savedOperations = 0;
-    
+
     for (const operation of operations) {
-      const { 
-        operatorNo, 
-        operatorName, 
-        operation: operationName, 
-        t1, t2, t3, t4, t5, 
-        capacityPerHour
-      } = operation;
+      const { operatorNo, operatorName, operation: operationName, t1, t2, t3, t4, t5, capacityPerHour } = operation;
 
       // Skip if no operator number
       if (!operatorNo) {
@@ -590,7 +593,7 @@ app.post("/api/save-operations", async (req, res) => {
       }
 
       const opNo = parseInt(operatorNo);
-      
+
       try {
         // Insert or get existing operator
         if (!operatorMap[opNo]) {
@@ -601,13 +604,9 @@ app.post("/api/save-operations", async (req, res) => {
             DO UPDATE SET operator_name = EXCLUDED.operator_name
             RETURNING id;
           `;
-          
-          const operatorResult = await client.query(operatorQuery, [
-            runId,
-            opNo,
-            operatorName || null
-          ]);
-          
+
+          const operatorResult = await client.query(operatorQuery, [runId, opNo, operatorName || null]);
+
           operatorMap[opNo] = operatorResult.rows[0].id;
           console.log(`✅ Operator ${opNo} saved/updated: ID ${operatorMap[opNo]}`);
         }
@@ -637,22 +636,21 @@ app.post("/api/save-operations", async (req, res) => {
             capacity_per_hour = EXCLUDED.capacity_per_hour
           RETURNING id;
         `;
-        
+
         const opResult = await client.query(operationQuery, [
           runId,
           operatorMap[opNo],
-          operationName || 'Unnamed Operation',
+          operationName || "Unnamed Operation",
           t1 ? parseFloat(t1) : null,
           t2 ? parseFloat(t2) : null,
           t3 ? parseFloat(t3) : null,
           t4 ? parseFloat(t4) : null,
           t5 ? parseFloat(t5) : null,
-          capacityPerHour || 0
+          capacityPerHour || 0,
         ]);
-        
+
         savedOperations++;
-        console.log(`✅ Operation "${operationName || 'Unnamed'}" saved for operator ${opNo}: ID ${opResult.rows[0].id}`);
-        
+        console.log(`✅ Operation "${operationName || "Unnamed"}" saved for operator ${opNo}: ID ${opResult.rows[0].id}`);
       } catch (opErr) {
         console.error(`❌ Error saving operation for operator ${opNo}:`, opErr.message);
         continue;
@@ -666,7 +664,7 @@ app.post("/api/save-operations", async (req, res) => {
         const slot = slotsResult.rows[i];
         const slotTarget = slotTargets[i] || 0;
         const cumulativeTarget = cumulativeTargets[i] || 0;
-        
+
         const slotTargetQuery = `
           INSERT INTO slot_targets (run_id, slot_id, slot_target, cumulative_target, created_at, updated_at)
           VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -676,34 +674,29 @@ app.post("/api/save-operations", async (req, res) => {
             cumulative_target = EXCLUDED.cumulative_target,
             updated_at = NOW();
         `;
-        
-        await client.query(slotTargetQuery, [
-          runId,
-          slot.id,
-          parseFloat(slotTarget),
-          parseFloat(cumulativeTarget)
-        ]);
+
+        await client.query(slotTargetQuery, [runId, slot.id, parseFloat(slotTarget), parseFloat(cumulativeTarget)]);
         savedTargets++;
       }
       console.log(`✅ ${savedTargets} slot targets saved for run ${runId}`);
     }
 
     await client.query("COMMIT");
-    
+
     console.log(`✅ Operations saved for run ${runId}: ${savedOperations} operations`);
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Operations data saved successfully",
       operationsCount: savedOperations,
-      operatorCount: Object.keys(operatorMap).length
+      operatorCount: Object.keys(operatorMap).length,
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error saving operations data:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -712,10 +705,10 @@ app.post("/api/save-operations", async (req, res) => {
 
 // ✅ User management endpoints (for engineers/supervisors only)
 const requireEngineerOrSupervisor = (req, res, next) => {
-  if (req.user.role !== 'engineer' && req.user.role !== 'supervisor') {
+  if (req.user.role !== "engineer" && req.user.role !== "supervisor") {
     return res.status(403).json({
       success: false,
-      error: "Access denied. Engineer or supervisor role required."
+      error: "Access denied. Engineer or supervisor role required.",
     });
   }
   next();
@@ -726,7 +719,7 @@ app.get("/api/users", authenticateToken, requireEngineerOrSupervisor, async (req
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const result = await client.query(`
       SELECT id, username, role, line_number, full_name, is_active, created_at, updated_at
       FROM users
@@ -740,16 +733,16 @@ app.get("/api/users", authenticateToken, requireEngineerOrSupervisor, async (req
         line_number NULLS FIRST,
         username
     `);
-    
+
     res.json({
       success: true,
-      users: result.rows
+      users: result.rows,
     });
   } catch (err) {
     console.error("❌ Error fetching users:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   } finally {
     client.release();
@@ -761,83 +754,82 @@ app.post("/api/users", authenticateToken, requireEngineerOrSupervisor, async (re
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { username, password, role, line_number, full_name } = req.body;
-    
+
     if (!username || !password || !role) {
       return res.status(400).json({
         success: false,
-        error: "Username, password, and role are required"
+        error: "Username, password, and role are required",
       });
     }
-    
+
     // Validate role
-    const validRoles = ['engineer', 'line_leader', 'supervisor'];
+    const validRoles = ["engineer", "line_leader", "supervisor"];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
         success: false,
-        error: "Invalid role. Must be 'engineer', 'line_leader', or 'supervisor'"
+        error: "Invalid role. Must be 'engineer', 'line_leader', or 'supervisor'",
       });
     }
-    
+
     // Validate line_number for line leaders
-    if (role === 'line_leader') {
+    if (role === "line_leader") {
       if (!line_number || line_number < 1 || line_number > 26) {
         return res.status(400).json({
           success: false,
-          error: "Line leaders must have a line number between 1 and 26"
+          error: "Line leaders must have a line number between 1 and 26",
         });
       }
-      
+
       // Check if line number is already assigned
-      const existingLineUser = await client.query(`
+      const existingLineUser = await client.query(
+        `
         SELECT username FROM users 
         WHERE role = 'line_leader' AND line_number = $1 AND is_active = TRUE
-      `, [line_number]);
-      
+      `,
+        [line_number]
+      );
+
       if (existingLineUser.rows.length > 0) {
         return res.status(400).json({
           success: false,
-          error: `Line ${line_number} is already assigned to user: ${existingLineUser.rows[0].username}`
+          error: `Line ${line_number} is already assigned to user: ${existingLineUser.rows[0].username}`,
         });
       }
     }
-    
+
     // Hash password
     const saltRounds = 10;
     const passwordHash = await bcrypt.hash(password, saltRounds);
-    
-    const result = await client.query(`
+
+    const result = await client.query(
+      `
       INSERT INTO users (username, password_hash, role, line_number, full_name, is_active)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING id, username, role, line_number, full_name, is_active, created_at
-    `, [
-      username,
-      passwordHash,
-      role,
-      line_number || null,
-      full_name || username,
-      true
-    ]);
-    
+    `,
+      [username, passwordHash, role, line_number || null, full_name || username, true]
+    );
+
     res.json({
       success: true,
       message: "User created successfully",
-      user: result.rows[0]
+      user: result.rows[0],
     });
-    
   } catch (err) {
     console.error("❌ Error creating user:", err.message);
-    
-    if (err.code === '23505') { // Unique violation
+
+    if (err.code === "23505") {
+      // Unique violation
       res.status(400).json({
         success: false,
-        error: "Username already exists"
+        error: "Username already exists",
       });
     } else {
       res.status(500).json({
         success: false,
-        error: err.message
+        error: err.message,
       });
     }
   } finally {
@@ -850,85 +842,85 @@ app.put("/api/users/:id", authenticateToken, requireEngineerOrSupervisor, async 
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { id } = req.params;
     const { username, password, role, line_number, full_name, is_active } = req.body;
-    
+
     // Build update query dynamically
     const updates = [];
     const values = [];
     let valueIndex = 1;
-    
+
     if (username !== undefined) {
       updates.push(`username = $${valueIndex++}`);
       values.push(username);
     }
-    
+
     if (password !== undefined) {
       const saltRounds = 10;
       const passwordHash = await bcrypt.hash(password, saltRounds);
       updates.push(`password_hash = $${valueIndex++}`);
       values.push(passwordHash);
     }
-    
+
     if (role !== undefined) {
       updates.push(`role = $${valueIndex++}`);
       values.push(role);
     }
-    
+
     if (line_number !== undefined) {
       updates.push(`line_number = $${valueIndex++}`);
       values.push(line_number);
     }
-    
+
     if (full_name !== undefined) {
       updates.push(`full_name = $${valueIndex++}`);
       values.push(full_name);
     }
-    
+
     if (is_active !== undefined) {
       updates.push(`is_active = $${valueIndex++}`);
       values.push(is_active);
     }
-    
+
     updates.push(`updated_at = NOW()`);
-    
-    if (updates.length === 1) { // Only updated_at was added
+
+    if (updates.length === 1) {
+      // Only updated_at was added
       return res.status(400).json({
         success: false,
-        error: "No fields to update"
+        error: "No fields to update",
       });
     }
-    
+
     values.push(id);
-    
+
     const query = `
       UPDATE users 
-      SET ${updates.join(', ')}
+      SET ${updates.join(", ")}
       WHERE id = $${valueIndex}
       RETURNING id, username, role, line_number, full_name, is_active, created_at, updated_at
     `;
-    
+
     const result = await client.query(query, values);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "User not found"
+        error: "User not found",
       });
     }
-    
+
     res.json({
       success: true,
       message: "User updated successfully",
-      user: result.rows[0]
+      user: result.rows[0],
     });
-    
   } catch (err) {
     console.error("❌ Error updating user:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   } finally {
     client.release();
@@ -940,41 +932,43 @@ app.delete("/api/users/:id", authenticateToken, requireEngineerOrSupervisor, asy
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { id } = req.params;
-    
+
     // Prevent deleting yourself
     if (parseInt(id) === req.user.id) {
       return res.status(400).json({
         success: false,
-        error: "Cannot delete your own account"
+        error: "Cannot delete your own account",
       });
     }
-    
-    const result = await client.query(`
+
+    const result = await client.query(
+      `
       UPDATE users 
       SET is_active = FALSE, updated_at = NOW()
       WHERE id = $1 AND is_active = TRUE
       RETURNING id, username
-    `, [id]);
-    
+    `,
+      [id]
+    );
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "User not found or already inactive"
+        error: "User not found or already inactive",
       });
     }
-    
+
     res.json({
       success: true,
-      message: "User deactivated successfully"
+      message: "User deactivated successfully",
     });
-    
   } catch (err) {
     console.error("❌ Error deleting user:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   } finally {
     client.release();
@@ -984,34 +978,35 @@ app.delete("/api/users/:id", authenticateToken, requireEngineerOrSupervisor, asy
 // ✅ Save hourly stitched data separately
 app.post("/api/save-hourly-data", async (req, res) => {
   const client = await pool.connect();
-  
+
   try {
     await setSchema(client);
     await client.query("BEGIN");
-    
+
     const { entries } = req.body;
-    
+
     if (!entries || !Array.isArray(entries)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing hourly data entries" 
+      return res.status(400).json({
+        success: false,
+        error: "Missing hourly data entries",
       });
     }
 
     let savedCount = 0;
     let skippedCount = 0;
-    
+
     for (const entry of entries) {
       const { runId, operatorNo, operationName, slotLabel, stitchedQty } = entry;
-      
+
       if (!runId || !operatorNo || !operationName || !slotLabel) {
         skippedCount++;
         continue;
       }
-      
+
       try {
         // Get operator and operation IDs
-        const opResult = await client.query(`
+        const opResult = await client.query(
+          `
           SELECT o.id as op_id, ro.id as operator_id
           FROM operator_operations o
           JOIN run_operators ro ON o.run_operator_id = ro.id
@@ -1019,13 +1014,18 @@ app.post("/api/save-hourly-data", async (req, res) => {
             AND ro.operator_no = $2 
             AND o.operation_name = $3
           LIMIT 1
-        `, [runId, parseInt(operatorNo), operationName]);
-        
+        `,
+          [runId, parseInt(operatorNo), operationName]
+        );
+
+        let operationId;
+
         if (opResult.rows.length === 0) {
           console.warn(`⚠️ Operation not found: ${operatorNo} - ${operationName}. Creating it now...`);
-          
+
           // Try to create the operation if it doesn't exist
-          const createOpResult = await client.query(`
+          const createOpResult = await client.query(
+            `
             WITH new_operator AS (
               INSERT INTO run_operators (run_id, operator_no, operator_name, created_at)
               VALUES ($1, $2, $3, NOW())
@@ -1043,34 +1043,36 @@ app.post("/api/save-hourly-data", async (req, res) => {
             SELECT $1, id, $4, 0, NOW()
             FROM new_operator
             RETURNING id;
-          `, [runId, parseInt(operatorNo), `Operator ${operatorNo}`, operationName]);
-          
+          `,
+            [runId, parseInt(operatorNo), `Operator ${operatorNo}`, operationName]
+          );
+
           if (createOpResult.rows.length === 0) {
             console.warn(`❌ Failed to create operation: ${operatorNo} - ${operationName}`);
             skippedCount++;
             continue;
           }
-          
-          var operationId = createOpResult.rows[0].id;
+
+          operationId = createOpResult.rows[0].id;
           console.log(`✅ Created missing operation: ${operatorNo} - ${operationName} (ID: ${operationId})`);
         } else {
-          var operationId = opResult.rows[0].op_id;
+          operationId = opResult.rows[0].op_id;
         }
-        
+
         // Get slot ID
-        const slotResult = await client.query(
-          "SELECT id FROM shift_slots WHERE run_id = $1 AND slot_label = $2",
-          [runId, slotLabel]
-        );
-        
+        const slotResult = await client.query("SELECT id FROM shift_slots WHERE run_id = $1 AND slot_label = $2", [
+          runId,
+          slotLabel,
+        ]);
+
         if (slotResult.rows.length === 0) {
           console.warn(`⚠️ Slot not found: ${slotLabel} for run ${runId}`);
           skippedCount++;
           continue;
         }
-        
+
         const slotId = slotResult.rows[0].id;
-        
+
         // Save hourly entry
         const hourlyQuery = `
           INSERT INTO operation_hourly_entries (
@@ -1087,16 +1089,10 @@ app.post("/api/save-hourly-data", async (req, res) => {
             stitched_qty = EXCLUDED.stitched_qty,
             updated_at = NOW();
         `;
-        
-        await client.query(hourlyQuery, [
-          runId,
-          operationId,
-          slotId,
-          parseFloat(stitchedQty) || 0
-        ]);
-        
+
+        await client.query(hourlyQuery, [runId, operationId, slotId, parseFloat(stitchedQty) || 0]);
+
         savedCount++;
-        
       } catch (entryErr) {
         console.error(`❌ Error saving hourly entry for ${operatorNo}-${operationName}:`, entryErr.message);
         skippedCount++;
@@ -1104,21 +1100,21 @@ app.post("/api/save-hourly-data", async (req, res) => {
     }
 
     await client.query("COMMIT");
-    
+
     console.log(`✅ Hourly data saved: ${savedCount} entries, ${skippedCount} skipped`);
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Hourly data saved",
       savedCount,
-      skippedCount
+      skippedCount,
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error saving hourly data:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1138,7 +1134,7 @@ app.post("/api/lineleader/update-sewed/:runId", async (req, res) => {
     if (!entries || !Array.isArray(entries)) {
       return res.status(400).json({
         success: false,
-        error: "Missing entries array"
+        error: "Missing entries array",
       });
     }
 
@@ -1167,10 +1163,10 @@ app.post("/api/lineleader/update-sewed/:runId", async (req, res) => {
       const operationId = opResult.rows[0].op_id;
 
       // 2) find slot id
-      const slotResult = await client.query(
-        `SELECT id FROM shift_slots WHERE run_id = $1 AND slot_label = $2 LIMIT 1`,
-        [runId, slotLabel]
-      );
+      const slotResult = await client.query(`SELECT id FROM shift_slots WHERE run_id = $1 AND slot_label = $2 LIMIT 1`, [
+        runId,
+        slotLabel,
+      ]);
 
       if (slotResult.rows.length === 0) continue;
       const slotId = slotResult.rows[0].id;
@@ -1205,19 +1201,16 @@ app.get("/api/get-run-data/:runId", async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { runId } = req.params;
 
     // 1) Get line run data
-    const runResult = await client.query(
-      "SELECT * FROM line_runs WHERE id = $1",
-      [runId]
-    );
+    const runResult = await client.query("SELECT * FROM line_runs WHERE id = $1", [runId]);
 
     if (runResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "Run not found"
+        error: "Run not found",
       });
     }
 
@@ -1292,7 +1285,7 @@ app.get("/api/get-run-data/:runId", async (req, res) => {
 
       operationsData.push({
         operator,
-        operations: operationsResult.rows
+        operations: operationsResult.rows,
       });
     }
 
@@ -1302,14 +1295,13 @@ app.get("/api/get-run-data/:runId", async (req, res) => {
       slots: slotsResult.rows,
       operators: operatorsResult.rows,
       operations: operationsData,
-      slotTargets: slotTargetsResult.rows
+      slotTargets: slotTargetsResult.rows,
     });
-
   } catch (err) {
     console.error("❌ Error fetching run data:", err.message);
     return res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1321,7 +1313,7 @@ app.get("/api/line-runs", async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const result = await client.query(`
       SELECT 
         id,
@@ -1338,16 +1330,16 @@ app.get("/api/line-runs", async (req, res) => {
       FROM line_runs
       ORDER BY run_date DESC, line_no
     `);
-    
+
     res.json({
       success: true,
-      runs: result.rows
+      runs: result.rows,
     });
   } catch (err) {
     console.error("❌ Error fetching line runs:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1359,10 +1351,11 @@ app.get("/api/line-runs/:lineNo", async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { lineNo } = req.params;
-    
-    const result = await client.query(`
+
+    const result = await client.query(
+      `
       SELECT 
         id,
         line_no,
@@ -1378,17 +1371,19 @@ app.get("/api/line-runs/:lineNo", async (req, res) => {
       FROM line_runs
       WHERE line_no = $1
       ORDER BY run_date DESC
-    `, [lineNo]);
-    
+    `,
+      [lineNo]
+    );
+
     res.json({
       success: true,
-      runs: result.rows
+      runs: result.rows,
     });
   } catch (err) {
     console.error("❌ Error fetching line runs by line:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1400,7 +1395,7 @@ app.get("/api/lineleader/latest-run", async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const line = String(req.query.line || "").trim();
     if (!line) return res.json({ success: false, error: "line is required" });
 
@@ -1451,24 +1446,21 @@ app.get("/api/run/:runId", async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
-    
+
     const { runId } = req.params;
-    
+
     // Get line run data
-    const runResult = await client.query(
-      "SELECT * FROM line_runs WHERE id = $1",
-      [runId]
-    );
-    
+    const runResult = await client.query("SELECT * FROM line_runs WHERE id = $1", [runId]);
+
     if (runResult.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Run not found" 
+      return res.status(404).json({
+        success: false,
+        error: "Run not found",
       });
     }
-    
+
     const runData = runResult.rows[0];
-    
+
     // Get shift slots
     const slotsResult = await client.query(
       `SELECT id, slot_order, slot_label, slot_start, slot_end, planned_hours 
@@ -1477,7 +1469,7 @@ app.get("/api/run/:runId", async (req, res) => {
        ORDER BY slot_order`,
       [runId]
     );
-    
+
     // Get operators
     const operatorsResult = await client.query(
       `SELECT id, operator_no, operator_name 
@@ -1486,7 +1478,7 @@ app.get("/api/run/:runId", async (req, res) => {
        ORDER BY operator_no`,
       [runId]
     );
-    
+
     // Get slot targets
     const slotTargetsResult = await client.query(
       `SELECT s.slot_label, t.slot_target, t.cumulative_target
@@ -1496,10 +1488,10 @@ app.get("/api/run/:runId", async (req, res) => {
        ORDER BY s.slot_order`,
       [runId]
     );
-    
+
     // Get operations with their hourly data
     const operationsData = [];
-    
+
     for (const operator of operatorsResult.rows) {
       const operationsResult = await client.query(
         `SELECT 
@@ -1523,27 +1515,26 @@ app.get("/api/run/:runId", async (req, res) => {
          ORDER BY o.created_at`,
         [operator.id, runId]
       );
-      
+
       operationsData.push({
         operator,
-        operations: operationsResult.rows
+        operations: operationsResult.rows,
       });
     }
-    
+
     res.json({
       success: true,
       run: runData,
       slots: slotsResult.rows,
       operators: operatorsResult.rows,
       operations: operationsData,
-      slotTargets: slotTargetsResult.rows
+      slotTargets: slotTargetsResult.rows,
     });
-    
   } catch (err) {
     console.error("❌ Error fetching run data:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1553,33 +1544,34 @@ app.get("/api/run/:runId", async (req, res) => {
 // ✅ Update hourly stitched data for a specific run
 app.post("/api/update-hourly-data/:runId", async (req, res) => {
   const client = await pool.connect();
-  
+
   try {
     await setSchema(client);
     await client.query("BEGIN");
-    
+
     const { runId } = req.params;
     const { entries } = req.body;
-    
+
     if (!entries || !Array.isArray(entries)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing hourly data entries" 
+      return res.status(400).json({
+        success: false,
+        error: "Missing hourly data entries",
       });
     }
 
     let savedCount = 0;
     let updatedCount = 0;
-    
+
     for (const entry of entries) {
       const { operatorNo, operationName, slotLabel, stitchedQty } = entry;
-      
+
       if (!operatorNo || !operationName || !slotLabel) {
         continue;
       }
-      
+
       // Get operation ID
-      const opResult = await client.query(`
+      const opResult = await client.query(
+        `
         SELECT o.id as op_id
         FROM operator_operations o
         JOIN run_operators ro ON o.run_operator_id = ro.id
@@ -1587,41 +1579,46 @@ app.post("/api/update-hourly-data/:runId", async (req, res) => {
           AND ro.operator_no = $2 
           AND o.operation_name = $3
         LIMIT 1
-      `, [runId, parseInt(operatorNo), operationName]);
-      
+      `,
+        [runId, parseInt(operatorNo), operationName]
+      );
+
       if (opResult.rows.length === 0) {
         console.warn(`⚠️ Operation not found: ${operatorNo} - ${operationName}`);
         continue;
       }
-      
+
       const operationId = opResult.rows[0].op_id;
-      
+
       // Get slot ID
-      const slotResult = await client.query(
-        "SELECT id FROM shift_slots WHERE run_id = $1 AND slot_label = $2",
-        [runId, slotLabel]
-      );
-      
+      const slotResult = await client.query("SELECT id FROM shift_slots WHERE run_id = $1 AND slot_label = $2", [
+        runId,
+        slotLabel,
+      ]);
+
       if (slotResult.rows.length === 0) {
         console.warn(`⚠️ Slot not found: ${slotLabel}`);
         continue;
       }
-      
+
       const slotId = slotResult.rows[0].id;
-      
+
       // Check if entry already exists
       const existingResult = await client.query(
         "SELECT id FROM operation_hourly_entries WHERE operation_id = $1 AND slot_id = $2",
         [operationId, slotId]
       );
-      
+
       // Save/update hourly entry
-      const hourlyQuery = existingResult.rows.length > 0 ? `
+      const hourlyQuery =
+        existingResult.rows.length > 0
+          ? `
         UPDATE operation_hourly_entries 
         SET stitched_qty = $1, updated_at = NOW()
         WHERE operation_id = $2 AND slot_id = $3
         RETURNING id
-      ` : `
+      `
+          : `
         INSERT INTO operation_hourly_entries (
           run_id,
           operation_id,
@@ -1633,13 +1630,14 @@ app.post("/api/update-hourly-data/:runId", async (req, res) => {
         VALUES ($4, $2, $3, $1, NOW(), NOW())
         RETURNING id
       `;
-      
-      const params = existingResult.rows.length > 0 
-        ? [parseFloat(stitchedQty) || 0, operationId, slotId]
-        : [parseFloat(stitchedQty) || 0, operationId, slotId, runId];
-      
+
+      const params =
+        existingResult.rows.length > 0
+          ? [parseFloat(stitchedQty) || 0, operationId, slotId]
+          : [parseFloat(stitchedQty) || 0, operationId, slotId, runId];
+
       await client.query(hourlyQuery, params);
-      
+
       if (existingResult.rows.length > 0) {
         updatedCount++;
       } else {
@@ -1648,21 +1646,21 @@ app.post("/api/update-hourly-data/:runId", async (req, res) => {
     }
 
     await client.query("COMMIT");
-    
+
     console.log(`✅ Hourly data updated for run ${runId}: ${savedCount} new, ${updatedCount} updated`);
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Hourly data updated",
       savedCount,
-      updatedCount
+      updatedCount,
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error updating hourly data:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1672,34 +1670,38 @@ app.post("/api/update-hourly-data/:runId", async (req, res) => {
 // ✅ Add operation to existing run
 app.post("/api/add-operation/:runId", async (req, res) => {
   const client = await pool.connect();
-  
+
   try {
     await setSchema(client);
     await client.query("BEGIN");
-    
+
     const { runId } = req.params;
     const { operatorNo, operatorName, operationName, t1, t2, t3, t4, t5, capacityPerHour } = req.body;
-    
+
     if (!operatorNo || !operationName) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing operator number or operation name" 
+      return res.status(400).json({
+        success: false,
+        error: "Missing operator number or operation name",
       });
     }
-    
+
     // Get or create operator
-    const operatorResult = await client.query(`
+    const operatorResult = await client.query(
+      `
       INSERT INTO run_operators (run_id, operator_no, operator_name, created_at)
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (run_id, operator_no) 
       DO UPDATE SET operator_name = EXCLUDED.operator_name
       RETURNING id
-    `, [runId, parseInt(operatorNo), operatorName || null]);
-    
+    `,
+      [runId, parseInt(operatorNo), operatorName || null]
+    );
+
     const operatorId = operatorResult.rows[0].id;
-    
+
     // Add operation
-    const operationResult = await client.query(`
+    const operationResult = await client.query(
+      `
       INSERT INTO operator_operations (
         run_id,
         run_operator_id,
@@ -1722,31 +1724,33 @@ app.post("/api/add-operation/:runId", async (req, res) => {
         t5_sec = EXCLUDED.t5_sec,
         capacity_per_hour = EXCLUDED.capacity_per_hour
       RETURNING id
-    `, [
-      runId,
-      operatorId,
-      operationName,
-      t1 ? parseFloat(t1) : null,
-      t2 ? parseFloat(t2) : null,
-      t3 ? parseFloat(t3) : null,
-      t4 ? parseFloat(t4) : null,
-      t5 ? parseFloat(t5) : null,
-      capacityPerHour || 0
-    ]);
-    
+    `,
+      [
+        runId,
+        operatorId,
+        operationName,
+        t1 ? parseFloat(t1) : null,
+        t2 ? parseFloat(t2) : null,
+        t3 ? parseFloat(t3) : null,
+        t4 ? parseFloat(t4) : null,
+        t5 ? parseFloat(t5) : null,
+        capacityPerHour || 0,
+      ]
+    );
+
     await client.query("COMMIT");
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Operation added successfully",
-      operationId: operationResult.rows[0].id
+      operationId: operationResult.rows[0].id,
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error adding operation:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -1754,195 +1758,503 @@ app.post("/api/add-operation/:runId", async (req, res) => {
 });
 
 // --------------------------------------------------------------
-// SUPERVISOR DASHBOARD ENDPOINTS
+// SUPERVISOR DASHBOARD ENDPOINTS (FIXED)
 // --------------------------------------------------------------
 
-// Middleware: only supervisors allowed
 const requireSupervisor = (req, res, next) => {
-  if (req.user.role !== 'supervisor') {
+  if (req.user.role !== "supervisor") {
     return res.status(403).json({
       success: false,
-      error: 'Access denied. Supervisor role required.'
+      error: "Access denied. Supervisor role required.",
     });
   }
   next();
 };
-app.get('/api/supervisor/summary',
-  authenticateToken,
-  requireSupervisor,
-  async (req, res) => {
-    const client = await pool.connect();
-    try {
-      
-      const { date } = req.query;
-      if (!date) {
-        return res.status(400).json({ success: false, error: 'date parameter required' });
-      }
 
-      // 1) Total target (already correct – direct sum)
-      const targetResult = await client.query(
-        `SELECT COALESCE(SUM(target_pcs), 0) as total_target
-         FROM line_runs
-         WHERE run_date = $1`,
-        [date]
-      );
-      const totalTarget = parseFloat(targetResult.rows[0].total_target) || 0;
+/**
+ * GET /api/supervisor/summary?date=YYYY-MM-DD
+ * Returns global totals for the selected date
+ */
 
-      // 2) Total sewed (already correct – direct sum)
-      const sewedResult = await client.query(
-        `SELECT COALESCE(SUM(se.sewed_qty), 0) as total_sewed
-         FROM operation_sewed_entries se
-         JOIN line_runs lr ON se.run_id = lr.id
-         WHERE lr.run_date = $1`,
-        [date]
-      );
-      const totalSewed = parseFloat(sewedResult.rows[0].total_sewed) || 0;
+app.get("/api/supervisor/summary", authenticateToken, requireSupervisor, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
 
-      // 3) Total operators (already correct – distinct count)
-      const operatorsResult = await client.query(
-        `SELECT COUNT(DISTINCT ro.operator_no) as total_operators
-         FROM run_operators ro
-         JOIN line_runs lr ON ro.run_id = lr.id
-         WHERE lr.run_date = $1`,
-        [date]
-      );
-      const totalOperators = parseInt(operatorsResult.rows[0].total_operators) || 0;
-
-      // 4) Efficiency – FIXED: no duplication of minutes
-      const efficiencyResult = await client.query(`
-        WITH 
-          run_available_minutes AS (
-            SELECT 
-              id,
-              (working_hours * operators_count * 60) AS available_minutes
-            FROM line_runs
-            WHERE run_date = $1
-          ),
-          run_sam_output AS (
-            SELECT 
-              lr.id,
-              SUM(lr.sam_minutes * se.sewed_qty) AS sam_output
-            FROM line_runs lr
-            JOIN operation_sewed_entries se ON lr.id = se.run_id
-            WHERE lr.run_date = $1
-            GROUP BY lr.id
-          )
-        SELECT 
-          COALESCE(SUM(ram.available_minutes), 0) AS total_available_minutes,
-          COALESCE(SUM(rso.sam_output), 0) AS total_sam_output
-        FROM run_available_minutes ram
-        LEFT JOIN run_sam_output rso ON ram.id = rso.id
-      `, [date]);
-
-      const row = efficiencyResult.rows[0];
-      const totalSamOutput = parseFloat(row.total_sam_output) || 0;
-      const totalAvailableMinutes = parseFloat(row.total_available_minutes) || 0;
-      const overallEfficiency = totalAvailableMinutes > 0
-        ? (totalSamOutput / totalAvailableMinutes) * 100
-        : 0;
-
-      // 5) Target achievement
-      const targetAchievement = totalTarget > 0 ? (totalSewed / totalTarget) * 100 : 0;
-
-      res.json({
-        success: true,
-        date,
-        summary: {
-          totalTarget: Math.round(totalTarget * 100) / 100,
-          totalSewed: Math.round(totalSewed * 100) / 100,
-          totalOperators,
-          targetAchievement: Math.round(targetAchievement * 100) / 100,
-          overallEfficiency: Math.round(overallEfficiency * 100) / 100
-        }
-      });
-    } catch (err) {
-      console.error('❌ /api/supervisor/summary error:', err.message);
-      res.status(500).json({ success: false, error: err.message });
-    } finally {
-      client.release();
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ success: false, error: "date parameter required" });
     }
+
+    // 1) Total target – direct sum
+    const targetResult = await client.query(
+      `SELECT COALESCE(SUM(target_pcs), 0) as total_target
+       FROM line_runs
+       WHERE run_date = $1`,
+      [date]
+    );
+    const totalTarget = parseFloat(targetResult.rows[0].total_target) || 0;
+
+    // 2) Total sewed – per operator per line: max of operation totals, then sum across lines
+    const sewedResult = await client.query(
+      `SELECT COALESCE(SUM(operator_production), 0) AS total_sewed
+       FROM (
+         SELECT 
+           t.line_no,
+           t.operator_no,
+           MAX(COALESCE(t.op_total, 0)) AS operator_production
+         FROM (
+           SELECT 
+             lr.line_no,
+             ro.operator_no,
+             oo.id,
+             COALESCE(SUM(se.sewed_qty), 0) AS op_total
+           FROM line_runs lr
+           JOIN run_operators ro ON lr.id = ro.run_id
+           JOIN operator_operations oo ON ro.id = oo.run_operator_id
+           LEFT JOIN operation_sewed_entries se ON oo.id = se.operation_id
+           WHERE lr.run_date = $1
+           GROUP BY lr.line_no, ro.operator_no, oo.id
+         ) t
+         GROUP BY t.line_no, t.operator_no
+       ) ops`,
+      [date]
+    );
+    const totalSewed = parseFloat(sewedResult.rows[0].total_sewed) || 0;
+
+    // 3) Total operators – distinct count
+    const operatorsResult = await client.query(
+      `SELECT COUNT(DISTINCT ro.operator_no) as total_operators
+       FROM run_operators ro
+       JOIN line_runs lr ON ro.run_id = lr.id
+       WHERE lr.run_date = $1`,
+      [date]
+    );
+    const totalOperators = parseInt(operatorsResult.rows[0].total_operators) || 0;
+
+    // 4) Efficiency – using bottleneck per run (min pieces) to count garments correctly
+    const efficiencyResult = await client.query(
+      `
+      WITH run_available_minutes AS (
+        SELECT 
+          id AS run_id,
+          (working_hours * operators_count * 60) AS available_minutes
+        FROM line_runs
+        WHERE run_date = $1
+      ),
+      run_operation_totals AS (
+        SELECT 
+          lr.id AS run_id,
+          lr.sam_minutes,
+          oo.id AS operation_id,
+          COALESCE(SUM(se.sewed_qty), 0) AS op_total
+        FROM line_runs lr
+        JOIN run_operators ro ON lr.id = ro.run_id
+        JOIN operator_operations oo ON ro.id = oo.run_operator_id
+        LEFT JOIN operation_sewed_entries se ON oo.id = se.operation_id
+        WHERE lr.run_date = $1
+        GROUP BY lr.id, lr.sam_minutes, oo.id
+      ),
+      run_min_pieces AS (
+        SELECT 
+          run_id,
+          sam_minutes,
+          MIN(op_total) AS min_pieces   -- bottleneck determines completed garments
+        FROM run_operation_totals
+        GROUP BY run_id, sam_minutes
+      )
+      SELECT 
+        COALESCE(SUM(ram.available_minutes), 0) AS total_available_minutes,
+        COALESCE(SUM(rmp.min_pieces * rmp.sam_minutes), 0) AS total_sam_output
+      FROM run_available_minutes ram
+      LEFT JOIN run_min_pieces rmp ON ram.run_id = rmp.run_id;
+    `,
+      [date]
+    );
+
+    const row = efficiencyResult.rows[0];
+    const totalSamOutput = parseFloat(row.total_sam_output) || 0;
+    const totalAvailableMinutes = parseFloat(row.total_available_minutes) || 0;
+    const overallEfficiency = totalAvailableMinutes > 0 ? (totalSamOutput / totalAvailableMinutes) * 100 : 0;
+
+    // 5) Target achievement
+    const targetAchievement = totalTarget > 0 ? (totalSewed / totalTarget) * 100 : 0;
+
+    res.json({
+      success: true,
+      date,
+      summary: {
+        totalTarget: Math.round(totalTarget * 100) / 100,
+        totalSewed: Math.round(totalSewed * 100) / 100,
+        totalOperators,
+        targetAchievement: Math.round(targetAchievement * 100) / 100,
+        overallEfficiency: Math.round(overallEfficiency * 100) / 100,
+      },
+    });
+  } catch (err) {
+    console.error("❌ /api/supervisor/summary error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
   }
-);
+});
+
+/**
+ * GET /api/supervisor/alert-count?date=YYYY-MM-DD
+ * Returns count of operators with production alerts (variance > 10% or production zero)
+ */
+app.get("/api/supervisor/alert-count", authenticateToken, requireSupervisor, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ success: false, error: "date parameter required" });
+    }
+
+    const alertQuery = `
+      WITH operator_planned AS (
+        SELECT 
+          ro.operator_no,
+          COALESCE(SUM(h.stitched_qty), 0) AS planned_total
+        FROM line_runs lr
+        JOIN run_operators ro ON lr.id = ro.run_id
+        JOIN operator_operations oo ON ro.id = oo.run_operator_id
+        LEFT JOIN operation_hourly_entries h ON oo.id = h.operation_id
+        WHERE lr.run_date = $1
+        GROUP BY ro.operator_no
+      ),
+      operator_actual AS (
+        SELECT 
+          ro.operator_no,
+          COALESCE(SUM(se.sewed_qty), 0) AS actual_total
+        FROM line_runs lr
+        JOIN run_operators ro ON lr.id = ro.run_id
+        JOIN operator_operations oo ON ro.id = oo.run_operator_id
+        LEFT JOIN operation_sewed_entries se ON oo.id = se.operation_id
+        WHERE lr.run_date = $1
+        GROUP BY ro.operator_no
+      )
+      SELECT COUNT(*) AS alert_count
+      FROM operator_planned p
+      JOIN operator_actual a ON p.operator_no = a.operator_no
+      WHERE a.actual_total < p.planned_total * 0.9
+         OR (p.planned_total > 0 AND a.actual_total = 0);
+    `;
+
+    const result = await client.query(alertQuery, [date]);
+    const alertCount = parseInt(result.rows[0].alert_count) || 0;
+
+    res.json({ success: true, date, alertCount });
+  } catch (err) {
+    console.error("❌ /api/supervisor/alert-count error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
 
 /**
  * GET /api/supervisor/line-performance?date=YYYY-MM-DD
- * Returns per‑line: line_no, totalTarget, totalSewed, achievement, efficiency
+ * Returns per-line: line_no, totalTarget, totalSewed, achievement, operators
  */
+app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
 
-app.get('/api/supervisor/line-performance',
-  authenticateToken,
-  requireSupervisor,
-  async (req, res) => {
-    const client = await pool.connect();
-    try {
-     
-      const { date } = req.query;
-      if (!date) {
-        return res.status(400).json({ success: false, error: 'date parameter required' });
-      }
-
-      const query = `
-        WITH 
-          -- 1) Sum target per line directly from line_runs (no joins)
-          line_targets AS (
-            SELECT line_no, SUM(target_pcs) AS total_target
-            FROM line_runs
-            WHERE run_date = $1
-            GROUP BY line_no
-          ),
-          -- 2) Sum sewed quantity per line via the sewed entries
-          line_sewed AS (
-            SELECT lr.line_no, COALESCE(SUM(se.sewed_qty), 0) AS total_sewed
-            FROM line_runs lr
-            JOIN run_operators ro ON lr.id = ro.run_id
-            JOIN operator_operations oo ON ro.id = oo.run_operator_id
-            JOIN operation_sewed_entries se ON oo.id = se.operation_id
-            WHERE lr.run_date = $1
-            GROUP BY lr.line_no
-          ),
-          -- 3) Count distinct operators per line
-          line_operators AS (
-            SELECT lr.line_no, COUNT(DISTINCT ro.operator_no) AS operators_count
-            FROM line_runs lr
-            JOIN run_operators ro ON lr.id = ro.run_id
-            WHERE lr.run_date = $1
-            GROUP BY lr.line_no
-          )
-        SELECT 
-          lt.line_no,
-          lt.total_target,
-          COALESCE(ls.total_sewed, 0) AS total_sewed,
-          COALESCE(lo.operators_count, 0) AS operators_count,
-          CASE 
-            WHEN lt.total_target > 0 
-            THEN (COALESCE(ls.total_sewed, 0) / lt.total_target) * 100 
-            ELSE 0 
-          END AS achievement
-        FROM line_targets lt
-        LEFT JOIN line_sewed ls ON lt.line_no = ls.line_no
-        LEFT JOIN line_operators lo ON lt.line_no = lo.line_no
-        ORDER BY lt.line_no;
-      `;
-
-      const result = await client.query(query, [date]);
-      
-      const lines = result.rows.map(row => ({
-        lineNo: row.line_no,
-        totalTarget: parseFloat(row.total_target) || 0,
-        totalSewed: parseFloat(row.total_sewed) || 0,
-        operators: parseInt(row.operators_count) || 0,
-        achievement: Math.round((parseFloat(row.achievement) || 0) * 100) / 100
-      }));
-
-      res.json({ success: true, date, lines });
-    } catch (err) {
-      console.error('❌ /api/supervisor/line-performance error:', err.message);
-      res.status(500).json({ success: false, error: err.message });
-    } finally {
-      client.release();
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ success: false, error: "date parameter required" });
     }
+
+    const query = `
+      WITH line_targets AS (
+        SELECT line_no, SUM(target_pcs) AS total_target
+        FROM line_runs
+        WHERE run_date = $1
+        GROUP BY line_no
+      ),
+      operator_production AS (
+        SELECT 
+          line_no,
+          operator_no,
+          MAX(COALESCE(op_total, 0)) AS operator_production
+        FROM (
+          SELECT 
+            lr.line_no,
+            ro.operator_no,
+            oo.id,
+            SUM(se.sewed_qty) AS op_total
+          FROM line_runs lr
+          JOIN run_operators ro ON lr.id = ro.run_id
+          JOIN operator_operations oo ON ro.id = oo.run_operator_id
+          LEFT JOIN operation_sewed_entries se ON oo.id = se.operation_id
+          WHERE lr.run_date = $1
+          GROUP BY lr.line_no, ro.operator_no, oo.id
+        ) t
+        GROUP BY line_no, operator_no
+      ),
+      line_sewed AS (
+        SELECT line_no, SUM(operator_production) AS total_sewed
+        FROM operator_production
+        GROUP BY line_no
+      ),
+      line_operators AS (
+        SELECT lr.line_no, COUNT(DISTINCT ro.operator_no) AS operators_count
+        FROM line_runs lr
+        JOIN run_operators ro ON lr.id = ro.run_id
+        WHERE lr.run_date = $1
+        GROUP BY lr.line_no
+      )
+      SELECT 
+        lt.line_no,
+        lt.total_target,
+        COALESCE(ls.total_sewed, 0) AS total_sewed,
+        COALESCE(lo.operators_count, 0) AS operators_count,
+        CASE 
+          WHEN lt.total_target > 0 
+          THEN (COALESCE(ls.total_sewed, 0) / lt.total_target) * 100 
+          ELSE 0 
+        END AS achievement
+      FROM line_targets lt
+      LEFT JOIN line_sewed ls ON lt.line_no = ls.line_no
+      LEFT JOIN line_operators lo ON lt.line_no = lo.line_no
+      ORDER BY lt.line_no;
+    `;
+
+    const result = await client.query(query, [date]);
+
+    const lines = result.rows.map((row) => ({
+      lineNo: row.line_no,
+      totalTarget: parseFloat(row.total_target) || 0,
+      totalSewed: parseFloat(row.total_sewed) || 0,
+      operators: parseInt(row.operators_count) || 0,
+      achievement: Math.round((parseFloat(row.achievement) || 0) * 100) / 100,
+    }));
+
+    res.json({ success: true, date, lines });
+  } catch (err) {
+    console.error("❌ /api/supervisor/line-performance error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
   }
-);
+});
+
+// ========== ENGINEER LINE BALANCING ==========
+
+const requireEngineer = (req, res, next) => {
+  if (req.user.role !== "engineer") {
+    return res.status(403).json({
+      success: false,
+      error: "Access denied. Engineer role required.",
+    });
+  }
+  next();
+};
+
+// ========== ENGINEER LINE BALANCING ==========
+
+/**
+ * GET /api/engineer/line-balancing/:runId
+ * Returns line run details and operator capacities for balancing
+ */
+app.get("/api/engineer/line-balancing/:runId", authenticateToken, requireEngineer, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    const { runId } = req.params;
+
+    // 1. Run details (including target_per_hour)
+    const runRes = await client.query(
+      `SELECT id, line_no, target_per_hour, working_hours, operators_count
+       FROM line_runs WHERE id = $1`,
+      [runId]
+    );
+    if (runRes.rowCount === 0) {
+      return res.status(404).json({ success: false, error: "Run not found" });
+    }
+    const run = runRes.rows[0];
+
+    // 2. Operators with their operations and capacities
+    const opsRes = await client.query(
+      `SELECT
+          ro.id AS operator_id,
+          ro.operator_no,
+          ro.operator_name,
+          oo.id AS operation_id,
+          oo.operation_name,
+          oo.capacity_per_hour,
+          -- average cycle time in seconds from t1..t5
+          (COALESCE(oo.t1_sec,0) + COALESCE(oo.t2_sec,0) + COALESCE(oo.t3_sec,0) + COALESCE(oo.t4_sec,0) + COALESCE(oo.t5_sec,0))
+          / NULLIF(
+            (CASE WHEN oo.t1_sec IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN oo.t2_sec IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN oo.t3_sec IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN oo.t4_sec IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN oo.t5_sec IS NOT NULL THEN 1 ELSE 0 END), 0
+          ) AS avg_cycle_sec
+       FROM run_operators ro
+       JOIN operator_operations oo ON ro.id = oo.run_operator_id
+       WHERE ro.run_id = $1
+       ORDER BY ro.operator_no, oo.id`,
+      [runId]
+    );
+
+    // 3. Group by operator
+    const operators = [];
+    const operatorMap = new Map();
+    for (const row of opsRes.rows) {
+      if (!operatorMap.has(row.operator_id)) {
+        operatorMap.set(row.operator_id, {
+          operator_id: row.operator_id,
+          operator_no: row.operator_no,
+          operator_name: row.operator_name,
+          operations: []
+        });
+        operators.push(operatorMap.get(row.operator_id));
+      }
+      operatorMap.get(row.operator_id).operations.push({
+        operation_id: row.operation_id,
+        operation_name: row.operation_name,
+        capacity_per_hour: Number(row.capacity_per_hour),
+        avg_cycle_sec: Number(row.avg_cycle_sec)
+      });
+    }
+
+    res.json({
+      success: true,
+      run,
+      operators
+    });
+  } catch (err) {
+    console.error("❌ /api/engineer/line-balancing error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/engineer/line-balancing/:runId/assign
+ * Save balancing assignments (fast operators helping slow ones)
+ */
+app.post("/api/engineer/line-balancing/:runId/assign", authenticateToken, requireEngineer, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    const { runId } = req.params;
+    const { assignments } = req.body; // array of { sourceOperatorId, targetOperatorId, operationId, assignedQtyPerHour }
+
+    for (const a of assignments) {
+      await client.query(
+        `INSERT INTO line_balancing_assignments
+           (run_id, source_operator_id, target_operator_id, operation_id, assigned_quantity_per_hour)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (run_id, source_operator_id, target_operator_id, operation_id)
+         DO UPDATE SET assigned_quantity_per_hour = EXCLUDED.assigned_quantity_per_hour,
+                       updated_at = NOW()`,
+        [runId, a.sourceOperatorId, a.targetOperatorId, a.operationId, a.assignedQtyPerHour]
+      );
+    }
+
+    await client.query("COMMIT");
+    res.json({ success: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ /api/engineer/line-balancing/assign error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+// ========== LINE LEADER ASSIGNMENTS ==========
+
+/**
+ * GET /api/lineleader/assignments/:runId
+ * Returns balancing assignments for a specific run (for line leader view)
+ */
+app.get("/api/lineleader/assignments/:runId", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    const { runId } = req.params;
+
+    const query = `
+      SELECT 
+        lba.id,
+        lba.source_operator_id,
+        lba.target_operator_id,
+        lba.operation_id,
+        lba.assigned_quantity_per_hour,
+        source.operator_no AS source_operator_no,
+        source.operator_name AS source_operator_name,
+        target.operator_no AS target_operator_no,
+        target.operator_name AS target_operator_name,
+        oo.operation_name
+      FROM line_balancing_assignments lba
+      JOIN run_operators source ON lba.source_operator_id = source.id
+      JOIN run_operators target ON lba.target_operator_id = target.id
+      JOIN operator_operations oo ON lba.operation_id = oo.id
+      WHERE lba.run_id = $1
+      ORDER BY source.operator_no, target.operator_no;
+    `;
+    const result = await client.query(query, [runId]);
+    res.json({ success: true, assignments: result.rows });
+  } catch (err) {
+    console.error("❌ Error fetching lineleader assignments:", err);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ========== SUPERVISOR ASSIGNMENTS ==========
+
+/**
+ * GET /api/supervisor/assignments?date=YYYY-MM-DD
+ * Returns aggregated assignments for a given date (total pieces helped = assigned_qty_per_hour * working_hours)
+ */
+app.get("/api/supervisor/assignments", authenticateToken, requireSupervisor, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ success: false, error: "date parameter required" });
+    }
+
+    const query = `
+      SELECT 
+        lr.line_no,
+        lba.source_operator_id,
+        lba.target_operator_id,
+        lba.assigned_quantity_per_hour,
+        lr.working_hours,
+        (lba.assigned_quantity_per_hour * lr.working_hours) AS total_helped_pieces,
+        source.operator_no AS source_operator_no,
+        source.operator_name AS source_operator_name,
+        target.operator_no AS target_operator_no,
+        target.operator_name AS target_operator_name
+      FROM line_balancing_assignments lba
+      JOIN line_runs lr ON lba.run_id = lr.id
+      JOIN run_operators source ON lba.source_operator_id = source.id
+      JOIN run_operators target ON lba.target_operator_id = target.id
+      WHERE lr.run_date = $1
+      ORDER BY lr.line_no, source.operator_no, target.operator_no;
+    `;
+    const result = await client.query(query, [date]);
+    res.json({ success: true, assignments: result.rows });
+  } catch (err) {
+    console.error("❌ Error fetching supervisor assignments:", err);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
 
 // ✅ Health check
 app.get("/api/health", async (req, res) => {
@@ -1950,16 +2262,16 @@ app.get("/api/health", async (req, res) => {
   try {
     await setSchema(client);
     await client.query("SELECT 1");
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Server and database are running",
       schema: "prod_db_schema",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    res.status(500).json({ 
-      success: false, 
-      error: "Database connection failed" 
+    res.status(500).json({
+      success: false,
+      error: "Database connection failed",
     });
   } finally {
     client.release();
@@ -1972,7 +2284,7 @@ app.post("/api/reset-database", async (req, res) => {
   try {
     await setSchema(client);
     await client.query("BEGIN");
-    
+
     // Delete in correct order (respecting foreign keys)
     await client.query("DELETE FROM operation_sewed_entries");
     await client.query("DELETE FROM operation_hourly_entries");
@@ -1981,19 +2293,19 @@ app.post("/api/reset-database", async (req, res) => {
     await client.query("DELETE FROM run_operators");
     await client.query("DELETE FROM shift_slots");
     await client.query("DELETE FROM line_runs");
-    
+
     await client.query("COMMIT");
-    
-    res.json({ 
-      success: true, 
-      message: "Database cleared successfully in prod_db_schema" 
+
+    res.json({
+      success: true,
+      message: "Database cleared successfully in prod_db_schema",
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error resetting database:", err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   } finally {
     client.release();
@@ -2005,17 +2317,17 @@ async function testConnection() {
   try {
     const client = await pool.connect();
     console.log("✅ Connected to PostgreSQL successfully");
-    
+
     await setSchema(client);
-    
+
     const res = await client.query("SELECT current_schema(), current_database()");
     console.log("📋 Schema:", res.rows[0].current_schema);
     console.log("📋 Database:", res.rows[0].current_database);
     console.log("🕒 Server time:", new Date());
-    
+
     // Create all tables after connection
     await createAllTables();
-    
+
     client.release();
   } catch (err) {
     console.error("❌ Database connection failed");
@@ -2029,7 +2341,7 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📁 Using schema: prod_db_schema`);
-  console.log(`🗄️ Database: ${process.env.PG_DB || 'prod_db'}`);
+  console.log(`🗄️ Database: ${process.env.PG_DB || "prod_db"}`);
 });
 
 setInterval(() => {
