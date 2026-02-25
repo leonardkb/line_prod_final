@@ -273,10 +273,6 @@ export default function AdminDashboard() {
       const operatorsCount = data.operators?.length || 0;
       const targetPcs = Number(data.run?.target_pcs || 0);
 
-      // --- DEDUPED TOTAL SEWED FOR SUMMARY CARDS ---
-      let totalSewed = 0;
-      const countedOperators = new Set(); // track operators already counted
-
       const operatorData = [];
 
       (data.operations || []).forEach((operatorGroup) => {
@@ -289,12 +285,6 @@ export default function AdminDashboard() {
           Object.values(sewedData).forEach((qty) => {
             operationSewed += parseFloat(qty) || 0;
           });
-
-          // Add to totalSewed only once per operator
-          if (!countedOperators.has(operatorNo)) {
-            totalSewed += operationSewed;
-            countedOperators.add(operatorNo);
-          }
 
           const stitchedData = operation.stitched_data || {};
           let operationPlanned = 0;
@@ -319,6 +309,14 @@ export default function AdminDashboard() {
 
       setOperatorDetails(operatorData);
 
+      // Calculate finished garments = sum of packing operations
+      const packingKeywords = ['pack', 'emp'];
+      const packingTotal = operatorData
+        .filter(op => packingKeywords.some(keyword => 
+          op.operationName.toLowerCase().includes(keyword)
+        ))
+        .reduce((sum, op) => sum + op.totalSewed, 0);
+
       const generatedAlerts = generateAlertsFromOperatorData(operatorData);
       setAlerts(generatedAlerts);
 
@@ -328,11 +326,11 @@ export default function AdminDashboard() {
         style: data.run.style,
         operatorsCount,
         totalTarget: targetPcs,
-        totalSewed,                    // ✅ now deduped
+        totalSewed: packingTotal,                    // ✅ now packing only
         workingHours: data.run.working_hours,
         sam: data.run.sam_minutes,
         efficiency: Number(data.run.efficiency || 0) * 100,
-        achievement: targetPcs > 0 ? ((totalSewed / targetPcs) * 100).toFixed(2) + "%" : "0%",
+        achievement: targetPcs > 0 ? ((packingTotal / targetPcs) * 100).toFixed(2) + "%" : "0%",
       });
     } catch (error) {
       console.error("Error fetching production data:", error);
@@ -818,10 +816,10 @@ export default function AdminDashboard() {
                 {summary && (
                   <tfoot className="bg-gray-50">
                     <tr>
-                      <td colSpan="3" className="px-6 py-4 text-right text-sm font-medium text-gray-700">
+                       {/*<td colSpan="3" className="px-6 py-4 text-right text-sm font-medium text-gray-700">
                         Totales:
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                         {operatorDetails.reduce((sum, op) => sum + op.plannedQty, 0).toLocaleString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
@@ -835,8 +833,8 @@ export default function AdminDashboard() {
                         {operatorDetails
                           .reduce((sum, op) => sum + (op.totalSewed - op.plannedQty), 0)
                           .toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                      </td>*/}
+                     {/* <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                         <span
                           className={`px-2 py-1 text-xs font-medium rounded-full ${
                             alerts.length > 0
@@ -848,7 +846,7 @@ export default function AdminDashboard() {
                         >
                           {alerts.length} Alerta{alerts.length !== 1 ? "s" : ""}
                         </span>
-                      </td>
+                      </td>*/}
                     </tr>
                   </tfoot>
                 )}
