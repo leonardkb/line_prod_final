@@ -1757,6 +1757,145 @@ app.post("/api/add-operation/:runId", async (req, res) => {
   }
 });
 
+// ✅ Duplicate an existing run to a new date
+app.post("/api/duplicate-run/:runId", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+
+    const { runId } = req.params;
+    const { newDate } = req.body;            // required: YYYY-MM-DD
+    const newLineNo = req.body.newLineNo;    // optional – if omitted, same line_no is used
+
+    if (!newDate) {
+      return res.status(400).json({ success: false, error: "newDate is required" });
+    }
+
+    // 1. Get source run
+    const sourceRunRes = await client.query(
+      `SELECT line_no, style, operators_count, working_hours,
+              sam_minutes, efficiency, target_pcs, target_per_hour
+       FROM line_runs WHERE id = $1`,
+      [runId]
+    );
+    if (sourceRunRes.rowCount === 0) {
+      return res.status(404).json({ success: false, error: "Source run not found" });
+    }
+    const src = sourceRunRes.rows[0];
+
+    // 2. Insert new line_run
+    const newRunRes = await client.query(
+      `INSERT INTO line_runs
+         (line_no, run_date, style, operators_count, working_hours,
+          sam_minutes, efficiency, target_pcs, target_per_hour, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+       RETURNING id`,
+      [
+        newLineNo || src.line_no,
+        newDate,
+        src.style,
+        src.operators_count,
+        src.working_hours,
+        src.sam_minutes,
+        src.efficiency,
+        src.target_pcs,
+        src.target_per_hour,
+      ]
+    );
+    const newRunId = newRunRes.rows[0].id;
+
+    // 3. Copy shift_slots – store mapping old slot_id -> new slot_id
+    const slotMap = new Map(); // old slot_id -> new slot_id
+    const slotsRes = await client.query(
+      `SELECT id, slot_order, slot_label, slot_start, slot_end, planned_hours
+       FROM shift_slots WHERE run_id = $1 ORDER BY slot_order`,
+      [runId]
+    );
+    for (const slot of slotsRes.rows) {
+      const newSlotRes = await client.query(
+        `INSERT INTO shift_slots
+           (run_id, slot_order, slot_label, slot_start, slot_end, planned_hours)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [newRunId, slot.slot_order, slot.slot_label, slot.slot_start, slot.slot_end, slot.planned_hours]
+      );
+      slotMap.set(slot.id, newSlotRes.rows[0].id);
+    }
+
+    // 4. Copy run_operators – store mapping old operator_id -> new operator_id
+    const operatorMap = new Map();
+    const operatorsRes = await client.query(
+      `SELECT id, operator_no, operator_name FROM run_operators WHERE run_id = $1`,
+      [runId]
+    );
+    for (const op of operatorsRes.rows) {
+      const newOpRes = await client.query(
+        `INSERT INTO run_operators (run_id, operator_no, operator_name, created_at)
+         VALUES ($1, $2, $3, NOW())
+         RETURNING id`,
+        [newRunId, op.operator_no, op.operator_name]
+      );
+      operatorMap.set(op.id, newOpRes.rows[0].id);
+    }
+
+    // 5. Copy operator_operations (using operatorMap)
+    for (const [oldOpId, newOpId] of operatorMap.entries()) {
+      const opsRes = await client.query(
+        `SELECT operation_name, t1_sec, t2_sec, t3_sec, t4_sec, t5_sec, capacity_per_hour
+         FROM operator_operations WHERE run_operator_id = $1`,
+        [oldOpId]
+      );
+      for (const opData of opsRes.rows) {
+        await client.query(
+          `INSERT INTO operator_operations
+             (run_id, run_operator_id, operation_name, t1_sec, t2_sec, t3_sec, t4_sec, t5_sec,
+              capacity_per_hour, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+          [
+            newRunId,
+            newOpId,
+            opData.operation_name,
+            opData.t1_sec,
+            opData.t2_sec,
+            opData.t3_sec,
+            opData.t4_sec,
+            opData.t5_sec,
+            opData.capacity_per_hour,
+          ]
+        );
+      }
+    }
+
+    // 6. Copy slot_targets (using slotMap)
+    const targetsRes = await client.query(
+      `SELECT slot_id, slot_target, cumulative_target
+       FROM slot_targets WHERE run_id = $1`,
+      [runId]
+    );
+    for (const tgt of targetsRes.rows) {
+      const newSlotId = slotMap.get(tgt.slot_id);
+      if (newSlotId) {
+        await client.query(
+          `INSERT INTO slot_targets (run_id, slot_id, slot_target, cumulative_target, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, NOW(), NOW())`,
+          [newRunId, newSlotId, tgt.slot_target, tgt.cumulative_target]
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+    res.json({ success: true, newRunId });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error duplicating run:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+
 // --------------------------------------------------------------
 // SUPERVISOR DASHBOARD ENDPOINTS (FIXED)
 // --------------------------------------------------------------
@@ -1821,46 +1960,37 @@ const totalSewed = parseFloat(sewedResult.rows[0].total_sewed) || 0;
     );
     const totalOperators = parseInt(operatorsResult.rows[0].total_operators) || 0;
 
-    // 4) Efficiency – using bottleneck per run (min pieces) to count garments correctly
-    const efficiencyResult = await client.query(
-      `
-      WITH run_available_minutes AS (
-        SELECT 
-          id AS run_id,
-          (working_hours * operators_count * 60) AS available_minutes
-        FROM line_runs
-        WHERE run_date = $1
-      ),
-      run_operation_totals AS (
-        SELECT 
-          lr.id AS run_id,
-          lr.sam_minutes,
-          oo.id AS operation_id,
-          COALESCE(SUM(se.sewed_qty), 0) AS op_total
-        FROM line_runs lr
-        JOIN run_operators ro ON lr.id = ro.run_id
-        JOIN operator_operations oo ON ro.id = oo.run_operator_id
-        LEFT JOIN operation_sewed_entries se ON oo.id = se.operation_id
-        WHERE lr.run_date = $1
-        GROUP BY lr.id, lr.sam_minutes, oo.id
-      ),
-      run_min_pieces AS (
-        SELECT 
-          run_id,
-          sam_minutes,
-          MIN(op_total) AS min_pieces   -- bottleneck determines completed garments
-        FROM run_operation_totals
-        GROUP BY run_id, sam_minutes
-      )
-      SELECT 
-        COALESCE(SUM(ram.available_minutes), 0) AS total_available_minutes,
-        COALESCE(SUM(rmp.min_pieces * rmp.sam_minutes), 0) AS total_sam_output
-      FROM run_available_minutes ram
-      LEFT JOIN run_min_pieces rmp ON ram.run_id = rmp.run_id;
-    `,
-      [date]
-    );
-
+   // 4) Efficiency – using packing output (finished garments) to count total SAM produced
+const efficiencyResult = await client.query(
+  `
+  WITH run_available_minutes AS (
+    SELECT
+      id AS run_id,
+      (working_hours * operators_count * 60) AS available_minutes
+    FROM line_runs
+    WHERE run_date = $1
+  ),
+  run_packing_totals AS (
+    SELECT
+      lr.id AS run_id,
+      lr.sam_minutes,
+      COALESCE(SUM(se.sewed_qty), 0) AS packing_total
+    FROM line_runs lr
+    JOIN run_operators ro ON lr.id = ro.run_id
+    JOIN operator_operations oo ON ro.id = oo.run_operator_id
+    LEFT JOIN operation_sewed_entries se ON oo.id = se.operation_id
+    WHERE lr.run_date = $1
+      AND (oo.operation_name ILIKE '%pack%' OR oo.operation_name ILIKE '%emp%')
+    GROUP BY lr.id, lr.sam_minutes
+  )
+  SELECT
+    COALESCE(SUM(ram.available_minutes), 0) AS total_available_minutes,
+    COALESCE(SUM(rpt.packing_total * rpt.sam_minutes), 0) AS total_sam_output
+  FROM run_available_minutes ram
+  LEFT JOIN run_packing_totals rpt ON ram.run_id = rpt.run_id;
+`,
+  [date]
+);
     const row = efficiencyResult.rows[0];
     const totalSamOutput = parseFloat(row.total_sam_output) || 0;
     const totalAvailableMinutes = parseFloat(row.total_available_minutes) || 0;
@@ -1948,6 +2078,8 @@ app.get("/api/supervisor/alert-count", authenticateToken, requireSupervisor, asy
  * GET /api/supervisor/line-performance?date=YYYY-MM-DD
  * Returns per-line: line_no, totalTarget, totalSewed, achievement, operators
  */
+// In server.js, replace the /api/supervisor/line-performance endpoint with this version
+
 app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1958,11 +2090,45 @@ app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor
       return res.status(400).json({ success: false, error: "date parameter required" });
     }
 
+    // Current time in the server's timezone (you may want to use client time later)
+    const now = new Date();
+    const todayStr = date; // YYYY-MM-DD
+
     const query = `
       WITH line_targets AS (
-        SELECT line_no, SUM(target_pcs) AS total_target
-        FROM line_runs
-        WHERE run_date = $1
+        SELECT lr.id AS run_id, lr.line_no, lr.target_pcs AS total_target
+        FROM line_runs lr
+        WHERE lr.run_date = $1
+      ),
+      -- Get all slots with their targets for each line
+      line_slots AS (
+        SELECT
+          lt.line_no,
+          ss.slot_start,
+          ss.slot_end,
+          st.slot_target
+        FROM line_targets lt
+        JOIN shift_slots ss ON lt.run_id = ss.run_id
+        LEFT JOIN slot_targets st ON ss.id = st.slot_id
+        WHERE ss.slot_start IS NOT NULL AND ss.slot_end IS NOT NULL
+      ),
+      -- Compute real‑time cumulative for each line
+      line_realtime AS (
+        SELECT
+          line_no,
+          SUM(
+            CASE
+              WHEN $2::timestamp AT TIME ZONE 'UTC' >= (($1 || ' ' || slot_end)::timestamp) THEN slot_target
+              WHEN $2::timestamp AT TIME ZONE 'UTC' >= (($1 || ' ' || slot_start)::timestamp)
+                   AND $2::timestamp AT TIME ZONE 'UTC' < (($1 || ' ' || slot_end)::timestamp)
+              THEN slot_target * (
+                EXTRACT(EPOCH FROM ($2::timestamp AT TIME ZONE 'UTC' - ($1 || ' ' || slot_start)::timestamp)) /
+                EXTRACT(EPOCH FROM (($1 || ' ' || slot_end)::timestamp - ($1 || ' ' || slot_start)::timestamp))
+              )
+              ELSE 0
+            END
+          ) AS realtime_target
+        FROM line_slots
         GROUP BY line_no
       ),
       operator_production AS (
@@ -1995,6 +2161,7 @@ app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor
         lt.total_target,
         COALESCE(ls.total_sewed, 0) AS total_sewed,
         COALESCE(lo.operators_count, 0) AS operators_count,
+        COALESCE(lr.realtime_target, 0) AS realtime_target,
         CASE 
           WHEN lt.total_target > 0 
           THEN (COALESCE(ls.total_sewed, 0) / lt.total_target) * 100 
@@ -2003,16 +2170,18 @@ app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor
       FROM line_targets lt
       LEFT JOIN line_sewed ls ON lt.line_no = ls.line_no
       LEFT JOIN line_operators lo ON lt.line_no = lo.line_no
+      LEFT JOIN line_realtime lr ON lt.line_no = lr.line_no
       ORDER BY lt.line_no;
     `;
 
-    const result = await client.query(query, [date]);
+    const result = await client.query(query, [date, now]);
 
     const lines = result.rows.map((row) => ({
       lineNo: row.line_no,
       totalTarget: parseFloat(row.total_target) || 0,
       totalSewed: parseFloat(row.total_sewed) || 0,
       operators: parseInt(row.operators_count) || 0,
+      realtimeTarget: Math.round(parseFloat(row.realtime_target) * 100) / 100, // two decimals
       achievement: Math.round((parseFloat(row.achievement) || 0) * 100) / 100,
     }));
 
@@ -2024,6 +2193,8 @@ app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor
     client.release();
   }
 });
+
+
 
 // ========== ENGINEER LINE BALANCING ==========
 
