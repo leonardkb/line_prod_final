@@ -34,25 +34,33 @@ export default function AdminDashboard() {
 
   const [initialLoadAttempted, setInitialLoadAttempted] = useState(false);
 
+  // Real‑time target states
+  const [realTimeTarget, setRealTimeTarget] = useState(0);
+  const [realTimeProgress, setRealTimeProgress] = useState(0);
+  const [operationRealTimeTargets, setOperationRealTimeTargets] = useState({});
+
   const generateLineOptions = () => {
     const arr = [];
     for (let i = 1; i <= 26; i++) arr.push(String(i));
     return arr;
   };
 
-  const generateAlertsFromOperatorData = (operatorDetails) => {
+  // ========== NEW: Alert generation using real‑time targets ==========
+  const generateRealTimeAlerts = (operatorDetails, realTimeMap) => {
     if (!operatorDetails || operatorDetails.length === 0) return [];
 
     const alertList = [];
 
     operatorDetails.forEach((operator) => {
-      const variance = operator.totalSewed - operator.plannedQty;
+      const opKey = `${operator.operatorNo}-${operator.operationName}`;
+      const realTimeTarget = realTimeMap[opKey] ?? operator.plannedQty; // fallback to full plan if missing
+      const variance = operator.totalSewed - realTimeTarget;
       const efficiency = parseFloat(operator.efficiency);
 
-      // Alerta 1: Variación negativa significativa (más del 10% debajo del objetivo)
-      if (variance < 0 && Math.abs(variance) > operator.plannedQty * 0.1) {
+      // Alerta 1: Variación negativa significativa (más del 10% debajo del objetivo en tiempo real)
+      if (variance < 0 && Math.abs(variance) > realTimeTarget * 0.1) {
         const severity =
-          Math.abs(variance) > operator.plannedQty * 0.3 ? "HIGH" : "MEDIUM";
+          Math.abs(variance) > realTimeTarget * 0.3 ? "HIGH" : "MEDIUM";
 
         alertList.push({
           id: `alert-${operator.operatorNo}-${Date.now()}`,
@@ -62,7 +70,7 @@ export default function AdminDashboard() {
           operatorName: operator.operatorName,
           operationName: operator.operationName,
           style: operator.style,
-          plannedQty: operator.plannedQty,
+          plannedQty: realTimeTarget,
           sewedQty: operator.totalSewed,
           variance: variance,
           efficiency: efficiency,
@@ -71,7 +79,7 @@ export default function AdminDashboard() {
           line: selectedLine,
           message: `Operador ${operator.operatorNo} (${operator.operatorName}) está ${Math.abs(
             variance
-          )} piezas debajo del objetivo para ${operator.operationName}`,
+          )} piezas debajo del objetivo en tiempo real para ${operator.operationName}`,
           timestamp: new Date().toISOString(),
         });
       }
@@ -118,8 +126,8 @@ export default function AdminDashboard() {
         });
       }
 
-      // Alerta 4: Producción cero pero existe cantidad planificada
-      if (operator.totalSewed === 0 && operator.plannedQty > 0) {
+      // Alerta 4: Producción cero pero existe cantidad planificada en tiempo real
+      if (operator.totalSewed === 0 && realTimeTarget > 0) {
         alertList.push({
           id: `no-production-${operator.operatorNo}-${Date.now()}`,
           type: "NO_PRODUCTION",
@@ -128,16 +136,16 @@ export default function AdminDashboard() {
           operatorName: operator.operatorName,
           operationName: operator.operationName,
           style: operator.style,
-          plannedQty: operator.plannedQty,
+          plannedQty: realTimeTarget,
           date: selectedDate,
           line: selectedLine,
-          message: `Operador ${operator.operatorNo} (${operator.operatorName}) tiene producción cero para ${operator.operationName}`,
+          message: `Operador ${operator.operatorNo} (${operator.operatorName}) tiene producción cero para ${operator.operationName} (se esperaban ${realTimeTarget.toFixed(2)} piezas)`,
           timestamp: new Date().toISOString(),
         });
       }
 
-      // Alerta 5: Variación negativa muy alta (> 50% debajo del objetivo)
-      if (variance < 0 && Math.abs(variance) > operator.plannedQty * 0.5) {
+      // Alerta 5: Variación negativa muy alta (> 50% debajo del objetivo en tiempo real)
+      if (variance < 0 && Math.abs(variance) > realTimeTarget * 0.5) {
         alertList.push({
           id: `critical-variance-${operator.operatorNo}-${Date.now()}`,
           type: "CRITICAL_VARIANCE",
@@ -146,16 +154,16 @@ export default function AdminDashboard() {
           operatorName: operator.operatorName,
           operationName: operator.operationName,
           style: operator.style,
-          plannedQty: operator.plannedQty,
+          plannedQty: realTimeTarget,
           sewedQty: operator.totalSewed,
           variance: variance,
-          variancePercentage: ((Math.abs(variance) / operator.plannedQty) * 100).toFixed(1),
+          variancePercentage: ((Math.abs(variance) / realTimeTarget) * 100).toFixed(1),
           date: selectedDate,
           line: selectedLine,
           message: `CRÍTICO: Operador ${operator.operatorNo} (${operator.operatorName}) está ${(
-            (Math.abs(variance) / operator.plannedQty) *
+            (Math.abs(variance) / realTimeTarget) *
             100
-          ).toFixed(1)}% debajo del objetivo para ${operator.operationName}`,
+          ).toFixed(1)}% debajo del objetivo en tiempo real para ${operator.operationName}`,
           timestamp: new Date().toISOString(),
         });
       }
@@ -222,6 +230,66 @@ export default function AdminDashboard() {
       window.history.replaceState({}, "", url);
     }
   }, [selectedLine, selectedDate, initialLoadAttempted]);
+
+  // ========== Real‑time target calculation (global + per operation) ==========
+  useEffect(() => {
+    if (!runData || !selectedDate || !operatorDetails.length) return;
+
+    const calculateTargets = () => {
+      const now = new Date();
+      const todayStr = selectedDate; // YYYY-MM-DD
+
+      // Build slots with start/end as Date objects
+      const slots = (runData.slots || [])
+        .map(slot => {
+          const start = new Date(`${todayStr}T${slot.slot_start}`);
+          const end = new Date(`${todayStr}T${slot.slot_end}`);
+          return { ...slot, start, end };
+        })
+        .filter(s => s.start && s.end);
+
+      // ---- Global cumulative ----
+      let globalCumulative = 0;
+      for (const slot of slots) {
+        const slotTarget = (runData.slotTargets || []).find(
+          st => st.slot_label === slot.slot_label
+        )?.slot_target || 0;
+        if (now >= slot.end) {
+          globalCumulative += Number(slotTarget);
+        } else if (now >= slot.start && now < slot.end) {
+          const elapsed = (now - slot.start) / (slot.end - slot.start);
+          globalCumulative += Number(slotTarget) * elapsed;
+          break;
+        } else {
+          break;
+        }
+      }
+      setRealTimeTarget(Math.round(globalCumulative * 100) / 100);
+      const total = summary?.totalTarget || 0;
+      setRealTimeProgress(total > 0 ? (globalCumulative / total) * 100 : 0);
+
+      // ---- Per‑operation cumulative: use the same global value for all operations ----
+      const perOpTargets = {};
+      (runData.operations || []).forEach(opGroup => {
+        const operator = opGroup.operator;
+        (opGroup.operations || []).forEach(operation => {
+          const key = `${operator.operator_no}-${operation.operation_name}`;
+          perOpTargets[key] = Math.round(globalCumulative * 100) / 100;
+        });
+      });
+      setOperationRealTimeTargets(perOpTargets);
+
+      // ---- Generate alerts based on real‑time targets ----
+      const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+      setAlerts(newAlerts);
+    };
+
+    calculateTargets();
+
+    // Refresh every minute
+    const interval = setInterval(calculateTargets, 60000);
+    return () => clearInterval(interval);
+  }, [runData, selectedDate, operatorDetails, summary?.totalTarget]);
 
   const fetchProductionData = async (isManual = true) => {
     if (!selectedLine || !selectedDate) {
@@ -300,7 +368,7 @@ export default function AdminDashboard() {
             operationName: operation.operation_name,
             style: data.run.style,
             totalSewed: operationSewed,
-            plannedQty: operationPlanned,
+            plannedQty: operationPlanned,          // full‑day planned total (for fallback)
             capacityPerHour,
             efficiency: capacityPerHour > 0 ? (operationSewed / capacityPerHour).toFixed(2) : "0",
           });
@@ -317,16 +385,14 @@ export default function AdminDashboard() {
         ))
         .reduce((sum, op) => sum + op.totalSewed, 0);
 
-      const generatedAlerts = generateAlertsFromOperatorData(operatorData);
-      setAlerts(generatedAlerts);
-
+      // Alerts are now generated inside the real‑time effect, so we don't call old generator here.
       setSummary({
         line: data.run.line_no,
         date: toYMD(data.run.run_date),
         style: data.run.style,
         operatorsCount,
         totalTarget: targetPcs,
-        totalSewed: packingTotal,                    // ✅ now packing only
+        totalSewed: packingTotal,
         workingHours: data.run.working_hours,
         sam: data.run.sam_minutes,
         efficiency: Number(data.run.efficiency || 0) * 100,
@@ -630,20 +696,21 @@ export default function AdminDashboard() {
               <div className="flex-shrink-0 text-green-500 text-2xl mr-4">✅</div>
               <div>
                 <h3 className="text-lg font-medium text-green-800">
-                  Todos los Operadores Cumplen los Objetivos
+                  Todos los Operadores Cumplen los Objetivos en Tiempo Real
                 </h3>
                 <p className="text-green-600 mt-1">
                   No se detectaron alertas de producción para la Línea {selectedLine} en{" "}
                   {formatDate(selectedDate)}. Todos los operadores están trabajando dentro de rangos
-                  aceptables.
+                  aceptables según el objetivo en tiempo real.
                 </p>
               </div>
             </div>
           </div>
         )}
 
+        {/* ========== SUMMARY CARDS (5) ========== */}
         {summary && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-6">
             <div className="bg-white rounded-xl shadow-sm p-5">
               <div className="text-sm font-medium text-gray-500 mb-2">Objetivo Total</div>
               <div className="text-2xl font-bold text-gray-900">
@@ -673,6 +740,24 @@ export default function AdminDashboard() {
                 Línea {summary.line} - {summary.style}
               </div>
             </div>
+
+            <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-blue-400">
+              <div className="text-sm font-medium text-gray-500 mb-2">Meta en tiempo real</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {realTimeTarget.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">piezas esperadas hasta ahora</div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
+                <div
+                  className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(realTimeProgress, 100)}%` }}
+                ></div>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">{realTimeProgress.toFixed(1)}% del objetivo</p>
+            </div>
           </div>
         )}
 
@@ -701,7 +786,7 @@ export default function AdminDashboard() {
                       Estilo
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Cantidad Planificada
+                      Meta de línea (tiempo real)
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Cantidad Cosida
@@ -723,9 +808,14 @@ export default function AdminDashboard() {
 
                 <tbody className="bg-white divide-y divide-gray-200">
                   {operatorDetails.map((operator, index) => {
-                    const variance = operator.totalSewed - operator.plannedQty;
-                    const varianceClass =
-                      variance >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50";
+                    // Unique key for this operation
+                    const opKey = `${operator.operatorNo}-${operator.operationName}`;
+                    // Real‑time planned quantity = line's cumulative target
+                    const realTimePlanned = operationRealTimeTargets[opKey] ?? operator.plannedQty;
+
+                    // Variance based on real‑time target
+                    const varianceReal = operator.totalSewed - realTimePlanned;
+                    const varianceClassReal = varianceReal >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50";
 
                     const operatorAlerts = alerts.filter((alert) => alert.operatorNo === operator.operatorNo);
                     const hasAlert = operatorAlerts.length > 0;
@@ -756,8 +846,12 @@ export default function AdminDashboard() {
                           </span>
                         </td>
 
+                        {/* Meta de línea (tiempo real) */}
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {operator.plannedQty.toLocaleString()}
+                          {realTimePlanned.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
                         </td>
 
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -784,10 +878,14 @@ export default function AdminDashboard() {
                           </span>
                         </td>
 
+                        {/* Variación corregida */}
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${varianceClass}`}>
-                            {variance >= 0 ? "+" : ""}
-                            {variance.toLocaleString()}
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${varianceClassReal}`}>
+                            {varianceReal >= 0 ? "+" : ""}
+                            {varianceReal.toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
                           </span>
                         </td>
 
@@ -815,39 +913,7 @@ export default function AdminDashboard() {
 
                 {summary && (
                   <tfoot className="bg-gray-50">
-                    <tr>
-                       {/*<td colSpan="3" className="px-6 py-4 text-right text-sm font-medium text-gray-700">
-                        Totales:
-                      </td>
-                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                        {operatorDetails.reduce((sum, op) => sum + op.plannedQty, 0).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                        {operatorDetails.reduce((sum, op) => sum + op.totalSewed, 0).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                        {operatorDetails.reduce((sum, op) => sum + op.capacityPerHour, 0).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">-</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                        {operatorDetails
-                          .reduce((sum, op) => sum + (op.totalSewed - op.plannedQty), 0)
-                          .toLocaleString()}
-                      </td>*/}
-                     {/* <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                        <span
-                          className={`px-2 py-1 text-xs font-medium rounded-full ${
-                            alerts.length > 0
-                              ? alerts.filter((a) => a.severity === "HIGH").length > 0
-                                ? "bg-red-100 text-red-800"
-                                : "bg-yellow-100 text-yellow-800"
-                              : "bg-green-100 text-green-800"
-                          }`}
-                        >
-                          {alerts.length} Alerta{alerts.length !== 1 ? "s" : ""}
-                        </span>
-                      </td>*/}
-                    </tr>
+                    <tr>{/* optional footer – left as originally */}</tr>
                   </tfoot>
                 )}
               </table>

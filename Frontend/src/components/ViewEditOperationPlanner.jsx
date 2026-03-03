@@ -27,12 +27,9 @@ export default function ViewEditOperationPlanner({
   initialRows,
   slotTargets,
   cumulativeTargets,
-  onUpdateHourly,
   onClose,
 }) {
   const [rows, setRows] = useState(initialRows || []);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
   const [searchText, setSearchText] = useState("");
   const [operatorFilterNo, setOperatorFilterNo] = useState("ALL");
 
@@ -102,56 +99,6 @@ export default function ViewEditOperationPlanner({
     });
   }, [visibleRows, slots]);
 
-  // Actualizar stitched: si el operador tiene número, se sincronizan todas sus filas
-  const updateRowStitched = (rowId, slotId, value) => {
-    setRows((prev) => {
-      const targetRow = prev.find((r) => r.id === rowId);
-      if (!targetRow) return prev;
-      const operatorNo = normalizeNo(targetRow.operatorNo);
-
-      // Sin número de operador → solo actualizar esa fila
-      if (!operatorNo) {
-        return prev.map((row) =>
-          row.id === rowId
-            ? { ...row, stitched: { ...row.stitched, [slotId]: value } }
-            : row
-        );
-      }
-
-      // Con número → actualizar TODAS las filas del mismo operador
-      return prev.map((row) => {
-        if (normalizeNo(row.operatorNo) === operatorNo) {
-          return { ...row, stitched: { ...row.stitched, [slotId]: value } };
-        }
-        return row;
-      });
-    });
-  };
-
-  const handleSaveHourlyUpdates = async () => {
-    if (!runId) {
-      setMessage("❌ No hay una corrida seleccionada");
-      return;
-    }
-
-    if (computedRows.length === 0) {
-      setMessage("❌ No hay datos de operaciones");
-      return;
-    }
-
-    setSaving(true);
-    setMessage("");
-
-    try {
-      await onUpdateHourly(computedRows);
-      setMessage("✅ ¡Datos por hora guardados correctamente!");
-    } catch (err) {
-      setMessage(`❌ No se pudo guardar: ${err.message}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   // Total general (sin duplicar operadores con varias operaciones)
   const totalStitched = useMemo(() => {
     const operatorMap = new Map();
@@ -186,11 +133,11 @@ export default function ViewEditOperationPlanner({
       <div className="px-5 py-4 border-b">
         <h2 className="font-semibold text-gray-900">Operaciones y seguimiento por hora</h2>
         <p className="text-sm text-gray-600">
-          Consulta y actualiza las cantidades cosidas por hora. Los cambios se guardan por separado.
+          Consulta las cantidades cosidas por hora. Esta vista es de solo lectura.
         </p>
       </div>
 
-      {/* Controles */}
+      {/* Controles de filtro */}
       <div className="px-5 py-4 border-b bg-gray-50">
         <div className="flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between">
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
@@ -229,29 +176,10 @@ export default function ViewEditOperationPlanner({
             </button>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="text-sm text-gray-600">
-              Total cosido: <span className="font-semibold">{totalStitched}</span>
-            </div>
-            <button
-              onClick={handleSaveHourlyUpdates}
-              disabled={saving}
-              className="rounded-xl px-6 py-3 text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
-            >
-              {saving ? "Guardando..." : "💾 Guardar actualizaciones por hora"}
-            </button>
+          <div className="text-sm text-gray-600">
+            Total cosido: <span className="font-semibold">{totalStitched}</span>
           </div>
         </div>
-
-        {message && (
-          <div
-            className={`mt-3 p-3 rounded-lg text-sm ${
-              message.includes("✅") ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
-            }`}
-          >
-            {message}
-          </div>
-        )}
       </div>
 
       {/* Grupos de operaciones */}
@@ -340,15 +268,13 @@ export default function ViewEditOperationPlanner({
                         </div>
                       </div>
 
-                      {/* Tabla por hora para esta operación */}
+                      {/* Tabla por hora para esta operación (solo lectura) */}
                       <div className="p-4">
                         <HourlyGrid
                           target={target}
                           slots={slots}
                           stitched={row.stitched}
-                          onChangeStitched={(slotId, value) =>
-                            updateRowStitched(row.id, slotId, value)
-                          }
+                          showStitchedInput={false}
                         />
                       </div>
                     </div>

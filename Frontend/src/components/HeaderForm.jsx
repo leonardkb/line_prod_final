@@ -22,12 +22,20 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
     return wh > 0 ? target / wh : 0;
   }, [target, value.workingHours]);
 
-  // Guardar
   const handleSave = async () => {
     setLoading(true);
     setMessage("");
 
     try {
+      // Map slots to include only the fields needed by the backend,
+      // and ensure startTime/endTime are passed (they come from buildShiftSlots)
+      const slotsData = (slots || []).map((slot) => ({
+        label: slot.label,
+        hours: slot.hours,
+        startTime: slot.startTime,  // now available from timeSlots.js
+        endTime: slot.endTime,      // now available from timeSlots.js
+      }));
+
       const payload = {
         line: value.line,
         date: value.date,
@@ -38,13 +46,13 @@ export default function HeaderForm({ value, onChange, slots, onSaveSuccess }) {
         efficiency: value.efficiency || 0.7,
         target: target,
         targetPerHour: targetPerHour,
-        slots: slots || []
+        slots: slotsData,
       };
 
       const response = await fetch("http://localhost:5000/api/save-production", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();

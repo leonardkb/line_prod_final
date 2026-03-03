@@ -6,27 +6,38 @@ import {
 } from 'recharts';
 import NavDashboard from '../components/NavDashboard';
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+
+function toYMD(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return String(d).slice(0, 10);
+  return dt.toISOString().slice(0, 10);
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [summary, setSummary] = useState(null);
   const [lineData, setLineData] = useState([]);
-  // NEW: State for line balancing assignments
+  const [lineRunData, setLineRunData] = useState({});
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const [globalRealtimeTarget, setGlobalRealtimeTarget] = useState(0);
+  const [lineRealtimeTargets, setLineRealtimeTargets] = useState({});
+
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
   const [hoveredCard, setHoveredCard] = useState(null);
 
-  // Detect screen size for responsive chart
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 640);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Check authentication and role
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) {
@@ -34,7 +45,7 @@ export default function Dashboard() {
       return;
     }
 
-    axios.get('http://localhost:5000/api/me', {
+    axios.get(`${API_BASE}/api/me`, {
       headers: { Authorization: `Bearer ${token}` }
     })
       .then(res => {
@@ -53,36 +64,84 @@ export default function Dashboard() {
       .catch(() => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
-        navigate('/login', { replace: true });
+        navigate('/', { replace: true });
       });
   }, []);
+
+  const computeRealtimeTarget = (runData, selectedDate) => {
+    if (!runData || !selectedDate) return 0;
+    const now = new Date();
+    const todayStr = selectedDate;
+    const slots = (runData.slots || [])
+      .map(slot => {
+        const start = new Date(`${todayStr}T${slot.slot_start}`);
+        const end = new Date(`${todayStr}T${slot.slot_end}`);
+        return { ...slot, start, end };
+      })
+      .filter(s => s.start && s.end);
+    let cumulative = 0;
+    for (const slot of slots) {
+      const slotTarget = (runData.slotTargets || []).find(
+        st => st.slot_label === slot.slot_label
+      )?.slot_target || 0;
+      if (now >= slot.end) {
+        cumulative += Number(slotTarget);
+      } else if (now >= slot.start && now < slot.end) {
+        const elapsed = (now - slot.start) / (slot.end - slot.start);
+        cumulative += Number(slotTarget) * elapsed;
+        break;
+      } else {
+        break;
+      }
+    }
+    return Math.round(cumulative * 100) / 100;
+  };
+
+  useEffect(() => {
+    const fetchLineDetails = async () => {
+      if (!lineData.length || !date) return;
+      const token = localStorage.getItem('token');
+      const headers = { Authorization: `Bearer ${token}` };
+      const newRunData = {};
+      const newTargets = {};
+      for (const line of lineData) {
+        try {
+          const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
+          if (!runsRes.data.success) continue;
+          const run = runsRes.data.runs.find(r => toYMD(r.run_date) === date);
+          if (!run) continue;
+          const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
+          if (!detailRes.data.success) continue;
+          newRunData[line.lineNo] = detailRes.data;
+          const rt = computeRealtimeTarget(detailRes.data, date);
+          newTargets[line.lineNo] = rt;
+        } catch (err) {
+          console.error(`Error fetching details for line ${line.lineNo}:`, err);
+        }
+      }
+      setLineRunData(newRunData);
+      setLineRealtimeTargets(newTargets);
+      const sum = Object.values(newTargets).reduce((a, b) => a + b, 0);
+      setGlobalRealtimeTarget(sum);
+    };
+    fetchLineDetails();
+  }, [lineData, date]);
 
   const fetchDashboardData = async (selectedDate) => {
     setLoading(true);
     setError('');
     const token = localStorage.getItem('token');
     const headers = { Authorization: `Bearer ${token}` };
-
     try {
-      // NEW: Include assignments endpoint
       const [summaryRes, lineRes, assignmentsRes] = await Promise.all([
-        axios.get(`http://localhost:5000/api/supervisor/summary?date=${selectedDate}`, { headers }),
-        axios.get(`http://localhost:5000/api/supervisor/line-performance?date=${selectedDate}`, { headers }),
-        axios.get(`http://localhost:5000/api/supervisor/assignments?date=${selectedDate}`, { headers })
+        axios.get(`${API_BASE}/api/supervisor/summary?date=${selectedDate}`, { headers }),
+        axios.get(`${API_BASE}/api/supervisor/line-performance?date=${selectedDate}`, { headers }),
+        axios.get(`${API_BASE}/api/supervisor/assignments?date=${selectedDate}`, { headers })
       ]);
-
-      if (summaryRes.data.success) {
-        setSummary(summaryRes.data.summary);
-      }
-      if (lineRes.data.success) {
-        setLineData(lineRes.data.lines);
-      }
-      // NEW: Set assignments if successful
-      if (assignmentsRes.data.success) {
-        setAssignments(assignmentsRes.data.assignments);
-      } else {
-        setAssignments([]);
-      }
+      if (summaryRes.data.success) setSummary(summaryRes.data.summary);
+      if (lineRes.data.success) setLineData(lineRes.data.lines);
+      if (assignmentsRes.data.success) setAssignments(assignmentsRes.data.assignments);
+      else setAssignments([]);
     } catch (err) {
       console.error(err);
       setError('No se pudieron cargar los datos del panel. Por favor inténtalo de nuevo.');
@@ -95,6 +154,8 @@ export default function Dashboard() {
     const newDate = e.target.value;
     setDate(newDate);
     fetchDashboardData(newDate);
+    setLineRunData({});
+    setLineRealtimeTargets({});
   };
 
   const formatNumber = (value) => {
@@ -105,7 +166,6 @@ export default function Dashboard() {
     });
   };
 
-  // Get status color and icon for line cards
   const getLineStatus = (variancePct, target) => {
     if (target === 0) return { color: 'gray', icon: '⏸️', text: 'Sin Objetivo' };
     if (variancePct < -15) return { color: 'red', icon: '🔴', text: 'Crítico' };
@@ -113,6 +173,26 @@ export default function Dashboard() {
     if (variancePct <= 5) return { color: 'green', icon: '🟢', text: 'En Ruta' };
     if (variancePct <= 15) return { color: 'yellow', icon: '🟡', text: 'Adelantado' };
     return { color: 'blue', icon: '🔵', text: 'Superando' };
+  };
+
+  const getStatusDot = (value, type) => {
+    if (value === undefined || value === null) return 'bg-gray-400';
+    if (type === 'efficiency') {
+      if (value < 60) return 'bg-red-500';
+      if (value < 80) return 'bg-yellow-500';
+      return 'bg-green-500';
+    }
+    if (type === 'cumplimiento') {
+      if (value < 70) return 'bg-red-500';
+      if (value < 90) return 'bg-yellow-500';
+      return 'bg-green-500';
+    }
+    if (type === 'realtimeEfficiency') {
+      if (value < 60) return 'bg-red-500';
+      if (value < 80) return 'bg-yellow-500';
+      return 'bg-green-500';
+    }
+    return 'bg-gray-400';
   };
 
   if (!user) {
@@ -131,7 +211,7 @@ export default function Dashboard() {
       <NavDashboard />
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-        {/* Header Section with Glassmorphism */}
+        {/* Header Section */}
         <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg p-6 mb-8 border border-white/50">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
@@ -169,7 +249,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Error message with animation */}
+        {/* Error message */}
         {error && (
           <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-6 py-4 rounded-xl mb-8 animate-slideDown flex items-center gap-3 shadow-md">
             <div>
@@ -179,9 +259,10 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Summary Cards with modern design */}
+        {/* Summary Cards – now 6 cards on large screens */}
         {!loading && summary && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-5 mb-8">
+            {/* Objetivo Total */}
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
                 <div>
@@ -192,6 +273,7 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* Total Cosido */}
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
                 <div>
@@ -202,20 +284,28 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* Eficiencia con indicador */}
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Eficiencia</p>
+                <div className="w-full">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`w-3 h-3 rounded-full ${getStatusDot(summary.overallEfficiency, 'efficiency')}`}></span>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Eficiencia</p>
+                  </div>
                   <p className="text-3xl font-bold text-gray-900">{formatNumber(summary.overallEfficiency)}</p>
                   <p className="text-xs text-gray-500 mt-2">%</p>
                 </div>
               </div>
             </div>
 
+            {/* Cumplimiento con indicador */}
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Cumplimiento</p>
+                <div className="w-full">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`w-3 h-3 rounded-full ${getStatusDot(summary.targetAchievement, 'cumplimiento')}`}></span>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Cumplimiento</p>
+                  </div>
                   <p className="text-3xl font-bold text-gray-900">{summary.targetAchievement?.toFixed(1)}%</p>
                   <div className="w-full bg-gray-200 rounded-full h-1.5 mt-2">
                     <div
@@ -226,10 +316,71 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+
+            {/* Meta en tiempo real */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Meta en tiempo real</p>
+                  <p className="text-3xl font-bold text-gray-900">{formatNumber(globalRealtimeTarget)}</p>
+                  <p className="text-xs text-gray-500 mt-2">piezas esperadas hasta ahora</p>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
+                    <div
+                      className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${summary.totalTarget > 0 ? (globalRealtimeTarget / summary.totalTarget) * 100 : 0}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {summary.totalTarget > 0 ? ((globalRealtimeTarget / summary.totalTarget) * 100).toFixed(1) : 0}% del objetivo global
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Real‑time Efficiency con indicador */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+              <div className="flex justify-between items-start">
+                <div className="w-full">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`w-3 h-3 rounded-full ${getStatusDot(
+                      globalRealtimeTarget > 0 ? (summary.totalSewed / globalRealtimeTarget) * 100 : 0,
+                      'realtimeEfficiency'
+                    )}`}></span>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Real‑time Efficiency</p>
+                  </div>
+                  <p className="text-3xl font-bold text-gray-900">
+                    {globalRealtimeTarget > 0
+                      ? ((summary.totalSewed / globalRealtimeTarget) * 100).toFixed(1)
+                      : '0'}%
+                  </p>
+                  <p className="text-xs text-gray-500 mt-2">de la meta en tiempo real</p>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
+                    <div
+                      className="bg-purple-600 h-1.5 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${
+                          globalRealtimeTarget > 0
+                            ? Math.min((summary.totalSewed / globalRealtimeTarget) * 100, 100)
+                            : 0
+                        }%`,
+                      }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {summary.totalSewed.toLocaleString()} /{' '}
+                    {globalRealtimeTarget.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{' '}
+                    piezas
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Line Performance Chart with enhanced styling */}
+        {/* Line Performance Chart */}
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-8 border border-gray-100">
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -257,7 +408,11 @@ export default function Dashboard() {
               <div className="min-w-[600px] sm:min-w-0 px-4 sm:px-0">
                 <ResponsiveContainer width="100%" height={isMobile ? 350 : 450}>
                   <ComposedChart
-                    data={lineData}
+                    data={lineData.map(line => ({
+                      lineNo: line.lineNo,
+                      totalSewed: line.totalSewed,
+                      realtimeTarget: lineRealtimeTargets[line.lineNo] || 0
+                    }))}
                     margin={{ top: 20, right: 30, left: 20, bottom: isMobile ? 70 : 40 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -304,12 +459,12 @@ export default function Dashboard() {
                     <Line
                       yAxisId="left"
                       type="monotone"
-                      dataKey="totalTarget"
+                      dataKey="realtimeTarget"
                       stroke="#8b5cf6"
                       strokeWidth={3}
                       dot={{ r: isMobile ? 4 : 6, fill: "#8b5cf6", strokeWidth: 2, stroke: "white" }}
                       activeDot={{ r: 8, fill: "#8b5cf6", stroke: "white", strokeWidth: 2 }}
-                      name="Objetivo"
+                      name="Objetivo (ahora)"
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -329,7 +484,7 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Loading state with skeleton */}
+        {/* Loading state */}
         {loading && (
           <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
             <div className="animate-pulse">
@@ -339,7 +494,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Line Cards with modern design */}
+        {/* Line Cards – with real‑time achievement indicator */}
         {!loading && lineData.length > 0 && (
           <div className="mt-8">
             <div className="flex items-center justify-between mb-6">
@@ -369,11 +524,12 @@ export default function Dashboard() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {lineData.map((line, idx) => {
-                const target = line.totalTarget || 0;
+                const realtimeTarget = lineRealtimeTargets[line.lineNo] || 0;
                 const sewed = line.totalSewed || 0;
-                const variance = sewed - target;
-                const variancePct = target > 0 ? (variance / target) * 100 : 0;
-                const status = getLineStatus(variancePct, target);
+                const variance = sewed - realtimeTarget;
+                const variancePct = realtimeTarget > 0 ? (variance / realtimeTarget) * 100 : 0;
+                const status = getLineStatus(variancePct, realtimeTarget);
+                const achievementPct = realtimeTarget > 0 ? (sewed / realtimeTarget) * 100 : 0;
 
                 const statusColors = {
                   red: 'border-red-500 bg-red-50',
@@ -414,9 +570,9 @@ export default function Dashboard() {
                     <div className="p-5">
                       <div className="mb-4">
                         <div className="flex justify-between text-xs mb-1">
-                          <span className="text-gray-600">Progreso</span>
+                          <span className="text-gray-600">Progreso (ahora)</span>
                           <span className="font-semibold text-gray-900">
-                            {target > 0 ? ((sewed / target) * 100).toFixed(1) : '0'}%
+                            {achievementPct.toFixed(1)}%
                           </span>
                         </div>
                         <div className="w-full bg-gray-200 rounded-full h-2">
@@ -427,15 +583,27 @@ export default function Dashboard() {
                               variancePct <= 5 ? 'bg-green-500' :
                               variancePct <= 15 ? 'bg-yellow-500' : 'bg-blue-500'
                             }`}
-                            style={{ width: `${target > 0 ? Math.min((sewed / target) * 100, 100) : 0}%` }}
+                            style={{ width: `${Math.min(achievementPct, 100)}%` }}
                           ></div>
+                        </div>
+
+                        {/* Real‑time achievement badge */}
+                        <div className="flex items-center justify-between mt-2">
+                          <span className="text-xs text-gray-500">Cumplimiento RT:</span>
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                            achievementPct >= 80 ? 'bg-green-100 text-green-800' :
+                            achievementPct >= 60 ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-red-100 text-red-800'
+                          }`}>
+                            {achievementPct.toFixed(1)}%
+                          </span>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 mb-4">
                         <div className="bg-gray-50 rounded-xl p-3">
-                          <p className="text-xs text-gray-500 mb-1">Objetivo</p>
-                          <p className="text-lg font-bold text-gray-900">{formatNumber(target)}</p>
+                          <p className="text-xs text-gray-500 mb-1">Objetivo (ahora)</p>
+                          <p className="text-lg font-bold text-gray-900">{formatNumber(realtimeTarget)}</p>
                         </div>
                         <div className="bg-gray-50 rounded-xl p-3">
                           <p className="text-xs text-gray-500 mb-1">Cosido</p>
@@ -471,7 +639,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NEW: Assignments Table */}
+        {/* Assignments Table */}
         {!loading && assignments.length > 0 && (
           <div className="mt-8">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Contribuciones de ayuda</h2>

@@ -2,7 +2,13 @@ import { useMemo } from "react";
 import { safeNum } from "../utils/calc";
 import { cumulative } from "../utils/timeslots";
 
-export default function HourlyGrid({ target, slots, stitched, onChangeStitched }) {
+export default function HourlyGrid({
+  target,
+  slots,
+  stitched,
+  onChangeStitched,
+  showStitchedInput = true, // new prop, defaults to true for backward compatibility
+}) {
   const wh = useMemo(
     () => (slots || []).reduce((a, s) => a + safeNum(s.hours), 0),
     [slots]
@@ -149,75 +155,82 @@ export default function HourlyGrid({ target, slots, stitched, onChangeStitched }
               </Td>
             </tr>
 
-            <tr>
-              <td
-                colSpan={(slots?.length || 0) + 2}
-                className="h-3 bg-transparent"
-              />
-            </tr>
+            {/* Spacer row – only shown when input rows are visible */}
+            {showStitchedInput && (
+              <tr>
+                <td
+                  colSpan={(slots?.length || 0) + 2}
+                  className="h-3 bg-transparent"
+                />
+              </tr>
+            )}
 
-            {/* Cosido input */}
-            <tr>
-              <Td
-                sticky
-                className="text-gray-900 font-semibold border-r border-gray-200 border-t border-gray-200"
-              >
-                Cosido (entrada)
-              </Td>
-
-              {(slots || []).map((s, i) => (
+            {/* Cosido input row – only shown when input is enabled */}
+            {showStitchedInput && (
+              <tr>
                 <Td
-                  key={s.id}
-                  className={`border-t border-gray-200 ${
-                    i < slots.length - 1
-                      ? "border-r border-gray-200"
-                      : ""
-                  }`}
+                  sticky
+                  className="text-gray-900 font-semibold border-r border-gray-200 border-t border-gray-200"
                 >
-                  <input
-                    value={stitched?.[s.id] ?? ""}
-                    onChange={(e) =>
-                      onChangeStitched(s.id, e.target.value)
-                    }
-                    className="w-24 rounded-lg border border-gray-200 px-2 py-1 text-sm outline-none
+                  Cosido (entrada)
+                </Td>
+
+                {(slots || []).map((s, i) => (
+                  <Td
+                    key={s.id}
+                    className={`border-t border-gray-200 ${
+                      i < slots.length - 1
+                        ? "border-r border-gray-200"
+                        : ""
+                    }`}
+                  >
+                    <input
+                      value={stitched?.[s.id] ?? ""}
+                      onChange={(e) =>
+                        onChangeStitched(s.id, e.target.value)
+                      }
+                      className="w-24 rounded-lg border border-gray-200 px-2 py-1 text-sm outline-none
                                focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 bg-white"
-                    placeholder="0"
-                    inputMode="numeric"
-                  />
+                      placeholder="0"
+                      inputMode="numeric"
+                    />
+                  </Td>
+                ))}
+
+                <Td className="font-semibold border-t border-gray-200 border-l border-gray-200">
+                  {totalStitched}
                 </Td>
-              ))}
+              </tr>
+            )}
 
-              <Td className="font-semibold border-t border-gray-200 border-l border-gray-200">
-                {totalStitched}
-              </Td>
-            </tr>
-
-            {/* Cosido acumulado */}
-            <tr>
-              <Td
-                sticky
-                className="text-gray-600 font-medium border-r border-gray-200 border-b border-gray-200"
-              >
-                Cosido Acumulado
-              </Td>
-
-              {cumStitched.map((v, i) => (
+            {/* Cosido acumulado row – only shown when input is enabled */}
+            {showStitchedInput && (
+              <tr>
                 <Td
-                  key={slots[i].id}
-                  className={`font-semibold border-b border-gray-200 ${
-                    i < slots.length - 1
-                      ? "border-r border-gray-200"
-                      : ""
-                  }`}
+                  sticky
+                  className="text-gray-600 font-medium border-r border-gray-200 border-b border-gray-200"
                 >
-                  {v}
+                  Cosido Acumulado
                 </Td>
-              ))}
 
-              <Td className="font-semibold border-b border-gray-200 border-l border-gray-200">
-                {totalStitched}
-              </Td>
-            </tr>
+                {cumStitched.map((v, i) => (
+                  <Td
+                    key={slots[i].id}
+                    className={`font-semibold border-b border-gray-200 ${
+                      i < slots.length - 1
+                        ? "border-r border-gray-200"
+                        : ""
+                    }`}
+                  >
+                    {v}
+                  </Td>
+                ))}
+
+                <Td className="font-semibold border-b border-gray-200 border-l border-gray-200">
+                  {totalStitched}
+                </Td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -230,8 +243,7 @@ export default function HourlyGrid({ target, slots, stitched, onChangeStitched }
   );
 }
 
-/* ---------- Table Helpers ---------- */
-
+/* ---------- Table Helpers (unchanged) ---------- */
 function Th({ children, sticky }) {
   return (
     <th

@@ -149,11 +149,7 @@ function HourlyPlanCard({
           </thead>
 
           <tbody>
-            <HourlyRow
-              label="Horas del bloque"
-              slots={slots}
-              renderCell={(slot) => safeNum(slot.planned_hours).toFixed(2)}
-            />
+            
 
             <HourlyRow
               label="Objetivo del bloque"
@@ -172,7 +168,10 @@ function HourlyPlanCard({
             />
 
             <tr>
-              <td className="sticky left-0 z-10 px-3 py-3 text-sm font-semibold text-gray-900 border-b border-gray-200 border-r border-gray-200 bg-white after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200">
+              <td className="sticky left-0 z-10 px-3 py-3 text-sm
+               font-semibold text-gray-900 border-b border-gray-200
+                border-r border-gray-200 bg-white after:absolute 
+                after:top-0 after:right-0 after:h-full after:w-px after:bg-gray-200">
                 Cosido (entrada)
               </td>
               {slots.map((slot, idx) => {
@@ -288,8 +287,8 @@ export default function LineLeaderPage() {
     }
   }, []);
 
-  // Get token for authenticated requests
-  const token = localStorage.getItem("token");
+  // Helper to get token from localStorage (always fresh)
+  const getToken = () => localStorage.getItem("token");
 
   useEffect(() => {
     alarmSoundRef.current = new Audio(
@@ -354,7 +353,7 @@ export default function LineLeaderPage() {
   }, [snoozeUntil]);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getToken();
     if (!token || !user) return navigate("/", { replace: true });
 
     if (normalizeRole(user.role) !== "lineleader") {
@@ -406,9 +405,21 @@ export default function LineLeaderPage() {
     setErrMsg("");
     setSaveMsg("");
 
+    const token = getToken();
+    if (!token) {
+      setErrMsg("No estás autenticado. Por favor inicia sesión de nuevo.");
+      setLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch(
-        `http://localhost:5000/api/lineleader/latest-run?line=${encodeURIComponent(lineNo)}`
+        `http://localhost:5000/api/lineleader/latest-run?line=${encodeURIComponent(lineNo)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
       const json = await res.json();
 
@@ -436,8 +447,18 @@ export default function LineLeaderPage() {
   }
 
   async function fetchRunData(runId) {
+    const token = getToken();
+    if (!token) {
+      setErrMsg("No estás autenticado. Por favor inicia sesión de nuevo.");
+      return;
+    }
+
     try {
-      const res = await fetch(`http://localhost:5000/api/get-run-data/${runId}`);
+      const res = await fetch(`http://localhost:5000/api/get-run-data/${runId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       const json = await res.json();
 
       if (!json.success) {
@@ -482,6 +503,9 @@ export default function LineLeaderPage() {
 
   // NEW: Fetch assignments for the current run
   async function fetchAssignments(runId) {
+    const token = getToken();
+    if (!token) return;
+
     try {
       const res = await fetch(`http://localhost:5000/api/lineleader/assignments/${runId}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -702,6 +726,12 @@ export default function LineLeaderPage() {
   async function handleSave() {
     if (!runData?.run?.id) return;
 
+    const token = getToken();
+    if (!token) {
+      setErrMsg("No estás autenticado. Por favor inicia sesión de nuevo.");
+      return;
+    }
+
     setSaving(true);
     setSaveMsg("");
     setErrMsg("");
@@ -729,7 +759,10 @@ export default function LineLeaderPage() {
 
       const res = await fetch(`http://localhost:5000/api/lineleader/update-sewed/${runId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ entries }),
       });
 
@@ -770,7 +803,8 @@ export default function LineLeaderPage() {
             <div>
               <div className="text-xl font-semibold text-gray-900">
                 {header.line} • {header.style || "Corrida"}
-                <span className="ml-3 inline-flex items-center rounded-full border bg-gray-50 px-3 py-1 text-sm text-gray-700">
+                <span className="ml-3 inline-flex items-center rounded-full border
+                 bg-gray-50 px-3 py-1 text-sm text-gray-700">
                   {header.date || ""}
                 </span>
               </div>
@@ -916,39 +950,13 @@ export default function LineLeaderPage() {
                   </button>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-sm text-gray-700">
-                    Total cosido: <span className="font-semibold">{totalSewed}</span>
-                  </div>
-
-                  <div className="flex gap-2">
-                    {alarmVisible && (
-                      <button
-                        onClick={handleDismissAlarm}
-                        className="rounded-xl bg-red-100 text-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-200"
-                      >
-                        ⏰ Cerrar alarma
-                      </button>
-                    )}
-
-                    <button
-                      onClick={handleSave}
-                      disabled={saving || !runData}
-                      className="rounded-xl bg-green-600 text-white px-6 py-3 text-sm font-semibold
-                                 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {saving ? "Guardando..." : "💾 Guardar Actualizaciones por Hora"}
-                    </button>
-                  </div>
-                </div>
-
                 {alarmVisible && (
                   <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-orange-800">
                       ⚡ RECORDATORIO: ¡Es hora de actualizar tus datos de producción!
                     </div>
                     <div className="mt-1 text-xs text-orange-600">
-                      Por favor ingresa las cantidades cosidas más recientes y haz clic en "Guardar Actualizaciones por Hora"
+                      Por favor ingresa las cantidades cosidas más recientes y haz clic en "Save Hourly Updates"
                     </div>
                   </div>
                 )}
@@ -1102,6 +1110,33 @@ export default function LineLeaderPage() {
                       </div>
                     );
                   })}
+                </div>
+
+                {/* Bottom action bar: total, dismiss alarm, and save button */}
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t pt-6">
+                  <div className="text-sm text-gray-700">
+                    Total sewed: <span className="font-semibold">{totalSewed}</span>
+                  </div>
+
+                  <div className="flex gap-2">
+                    {alarmVisible && (
+                      <button
+                        onClick={handleDismissAlarm}
+                        className="rounded-xl bg-red-100 text-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-200"
+                      >
+                        ⏰ Dismiss alarm
+                      </button>
+                    )}
+
+                    <button
+                      onClick={handleSave}
+                      disabled={saving || !runData}
+                      className="rounded-xl bg-green-600 text-white px-6 py-3 text-sm font-semibold
+                                 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {saving ? "Saving..." : "💾 Save Hourly Updates"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </>

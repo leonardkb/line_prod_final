@@ -2,6 +2,20 @@ import { useEffect, useState } from "react";
 import MetaSummary from "./MetaSummary";
 import ViewEditOperationPlanner from "./ViewEditOperationPlanner";
 
+// Helper to ensure dates are compared as YYYY-MM-DD strings
+const normalizeDate = (dateStr) => {
+  if (!dateStr) return "";
+  // If it's already YYYY-MM-DD, return it
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  try {
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().split("T")[0];
+    }
+  } catch (e) {}
+  return dateStr;
+};
+
 export default function SavedRunsViewer({ onBack }) {
   const [lineRuns, setLineRuns] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
@@ -9,6 +23,14 @@ export default function SavedRunsViewer({ onBack }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [activePanel, setActivePanel] = useState("select"); // select, summary, operations
+
+  // Copy dialog state
+  const [copyDialog, setCopyDialog] = useState({ open: false, run: null });
+  const [newDate, setNewDate] = useState("");
+  const [copyLoading, setCopyLoading] = useState(false);
+
+  // Date filter state
+  const [filterDate, setFilterDate] = useState("");
 
   // Cargar todas las corridas guardadas
   useEffect(() => {
@@ -18,7 +40,12 @@ export default function SavedRunsViewer({ onBack }) {
   const fetchLineRuns = async () => {
     setLoading(true);
     try {
-      const response = await fetch("http://localhost:5000/api/line-runs");
+      const token = localStorage.getItem("token");
+      const response = await fetch("http://localhost:5000/api/line-runs", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       const data = await response.json();
 
       if (data.success) {
@@ -38,7 +65,12 @@ export default function SavedRunsViewer({ onBack }) {
     setMessage("");
 
     try {
-      const response = await fetch(`http://localhost:5000/api/run/${runId}`);
+      const token = localStorage.getItem("token");
+      const response = await fetch(`http://localhost:5000/api/run/${runId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       const data = await response.json();
 
       if (data.success) {
@@ -55,33 +87,12 @@ export default function SavedRunsViewer({ onBack }) {
     }
   };
 
-  // Refrescar datos (sin cambiar el panel)
-  const refreshOperationsData = async () => {
-    if (!selectedRun) return;
-
-    setLoading(true);
-    try {
-      const response = await fetch(`http://localhost:5000/api/run/${selectedRun}`);
-      const data = await response.json();
-
-      if (data.success) {
-        setRunData(data);
-      } else {
-        setMessage(`❌ Error al refrescar datos: ${data.error}`);
-      }
-    } catch (err) {
-      setMessage(`❌ No se pudieron refrescar los datos: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Convertir slots de BD a formato frontend
   const getSlotsFromData = () => {
     if (!runData?.slots) return [];
 
     return runData.slots.map((slot) => ({
-      id: slot.slot_label, // usando label como ID
+      id: slot.slot_label,
       label: slot.slot_label,
       hours: parseFloat(slot.planned_hours),
       startTime: slot.slot_start,
@@ -99,7 +110,6 @@ export default function SavedRunsViewer({ onBack }) {
       opGroup.operations.forEach((op) => {
         const stitched = {};
 
-        // Mapear stitched data desde la BD
         if (op.stitched_data) {
           Object.entries(op.stitched_data).forEach(([slotLabel, qty]) => {
             if (slotLabel) stitched[slotLabel] = qty;
@@ -136,90 +146,43 @@ export default function SavedRunsViewer({ onBack }) {
     return runData.slotTargets.map((st) => parseFloat(st.cumulative_target) || 0);
   };
 
-  // Actualizar datos por hora
-  const handleUpdateHourlyData = async (rows) => {
-    if (!selectedRun) return;
+  // --- Copy / Duplicate handler ---
+  const handleCopyRun = async () => {
+    if (!copyDialog.run || !newDate) return;
 
-    setLoading(true);
+    setCopyLoading(true);
     setMessage("");
-
     try {
-      const slots = getSlotsFromData();
-      const hourlyPayloads = [];
-
-      rows.forEach((row) => {
-        if (row.stitched) {
-          slots.forEach((slot) => {
-            const stitchedQty = row.stitched[slot.id];
-            if (stitchedQty !== "" && stitchedQty !== null && stitchedQty !== undefined) {
-              hourlyPayloads.push({
-                operatorNo: row.operatorNo,
-                operationName: row.operation,
-                slotLabel: slot.label,
-                stitchedQty: parseFloat(stitchedQty) || 0,
-              });
-            }
-          });
-        }
-      });
-
-      if (hourlyPayloads.length === 0) {
-        setMessage("⚠️ No hay datos por hora para actualizar");
-        setLoading(false);
-        return;
-      }
-
-      const response = await fetch(
-        `http://localhost:5000/api/update-hourly-data/${selectedRun}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entries: hourlyPayloads }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (data.success) {
-        setMessage(`✅ Se actualizaron ${data.savedCount + data.updatedCount} registros por hora`);
-        await refreshOperationsData();
-      } else {
-        setMessage(`❌ Error: ${data.error}`);
-      }
-    } catch (err) {
-      setMessage(`❌ No se pudieron actualizar los datos por hora: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAddOperation = async (operationData) => {
-    if (!selectedRun) return;
-
-    setLoading(true);
-    setMessage("");
-
-    try {
-      const response = await fetch(`http://localhost:5000/api/add-operation/${selectedRun}`, {
+      const token = localStorage.getItem("token");
+      const response = await fetch(`http://localhost:5000/api/duplicate-run/${copyDialog.run.id}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(operationData),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ newDate }),
       });
 
       const data = await response.json();
-
       if (data.success) {
-        setMessage("✅ Operación agregada correctamente");
-        await refreshOperationsData();
+        setMessage(`✅ Corrida duplicada correctamente. Nuevo ID: ${data.newRunId}`);
+        setCopyDialog({ open: false, run: null });
+        setNewDate("");
+        await fetchLineRuns();
       } else {
         setMessage(`❌ Error: ${data.error}`);
       }
     } catch (err) {
-      setMessage(`❌ No se pudo agregar la operación: ${err.message}`);
+      setMessage(`❌ No se pudo duplicar: ${err.message}`);
     } finally {
-      setLoading(false);
+      setCopyLoading(false);
     }
   };
+
+  // Filtrar runs por fecha seleccionada – ahora con normalización
+  const filteredRuns = filterDate
+    ? lineRuns.filter((run) => normalizeDate(run.run_date) === normalizeDate(filterDate))
+    : lineRuns;
 
   if (loading) {
     return (
@@ -236,7 +199,7 @@ export default function SavedRunsViewer({ onBack }) {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Ver corridas guardadas</h1>
           <p className="text-sm text-gray-600">
-            Selecciona una corrida guardada para ver y actualizar la información
+            Selecciona una corrida guardada para ver la información
           </p>
         </div>
         <button
@@ -264,39 +227,119 @@ export default function SavedRunsViewer({ onBack }) {
           <div className="px-5 py-4 border-b">
             <h2 className="font-semibold text-gray-900">Seleccionar corrida de línea</h2>
             <p className="text-sm text-gray-600">
-              Elige una corrida de producción guardada para ver y editar
+              Elige una corrida de producción guardada para ver
             </p>
           </div>
 
           <div className="p-5">
-            {lineRuns.length === 0 ? (
+            {/* Filtro por fecha */}
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <div className="w-full sm:w-64">
+                <input
+                  type="date"
+                  value={filterDate}
+                  onChange={(e) => setFilterDate(e.target.value)}
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  placeholder="Filtrar por fecha"
+                />
+              </div>
+              {filterDate && (
+                <button
+                  onClick={() => setFilterDate("")}
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+                >
+                  Limpiar filtro
+                </button>
+              )}
+              <span className="text-sm text-gray-600">
+                {filteredRuns.length} corrida(s) encontrada(s)
+              </span>
+            </div>
+
+            {filteredRuns.length === 0 ? (
               <div className="text-center py-8 text-gray-600">
-                No se encontraron corridas guardadas. Primero guarda una corrida desde el planificador.
+                {filterDate
+                  ? `No hay corridas para la fecha ${filterDate}`
+                  : "No se encontraron corridas guardadas. Primero guarda una corrida desde el planificador."}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {lineRuns.map((run) => (
+                {filteredRuns.map((run) => (
                   <div
                     key={run.id}
+                    className="rounded-xl border border-gray-200 p-4 hover:border-gray-300 hover:bg-gray-50 cursor-pointer transition flex flex-col h-full"
                     onClick={() => handleSelectRun(run.id)}
-                    className="rounded-xl border border-gray-200 p-4 hover:border-gray-300 hover:bg-gray-50 cursor-pointer transition"
                   >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="font-semibold text-gray-900">{run.line_no}</div>
-                      <div className="text-xs text-gray-500">
-                        {new Date(run.run_date).toLocaleDateString()}
+                    <div className="flex-grow">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="font-semibold text-gray-900">{run.line_no}</div>
+                        <div className="text-xs text-gray-500">
+                          {new Date(run.run_date).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <div className="text-sm text-gray-600 mb-1">Estilo: {run.style}</div>
+                      <div className="text-sm text-gray-600 mb-1">Operadores: {run.operators_count}</div>
+                      <div className="text-sm text-gray-600">Meta: {run.target_pcs} pzas</div>
+                      <div className="mt-3 text-xs text-gray-500">
+                        Creado: {new Date(run.created_at).toLocaleString()}
                       </div>
                     </div>
-                    <div className="text-sm text-gray-600 mb-1">Estilo: {run.style}</div>
-                    <div className="text-sm text-gray-600 mb-1">Operadores: {run.operators_count}</div>
-                    <div className="text-sm text-gray-600">Meta: {run.target_pcs} pzas</div>
-                    <div className="mt-3 text-xs text-gray-500">
-                      Creado: {new Date(run.created_at).toLocaleString()}
+
+                    {/* Botón de copiar (texto) */}
+                    <div className="mt-3 pt-3 border-t border-gray-100 flex justify-end">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCopyDialog({ open: true, run });
+                          setNewDate("");
+                        }}
+                        className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        📋 Copiar a nueva fecha
+                      </button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de copia */}
+      {copyDialog.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Duplicar corrida
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Copiar línea {copyDialog.run?.line_no} – {copyDialog.run?.style} a una nueva fecha.
+            </p>
+            <label className="block mb-4">
+              <span className="text-sm font-medium text-gray-700">Nueva fecha</span>
+              <input
+                type="date"
+                value={newDate}
+                onChange={(e) => setNewDate(e.target.value)}
+                className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-gray-900/10"
+              />
+            </label>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setCopyDialog({ open: false, run: null })}
+                className="px-4 py-2 text-sm border border-gray-200 rounded-xl hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCopyRun}
+                disabled={!newDate || copyLoading}
+                className="px-4 py-2 text-sm bg-gray-900 text-white rounded-xl hover:bg-gray-800 disabled:opacity-50"
+              >
+                {copyLoading ? "Copiando..." : "Copiar"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -434,9 +477,9 @@ export default function SavedRunsViewer({ onBack }) {
               <div className="mb-4 rounded-2xl border bg-white shadow-sm p-5">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h2 className="font-semibold text-gray-900">Administración de operaciones</h2>
+                    <h2 className="font-semibold text-gray-900">Operaciones por operador</h2>
                     <p className="text-sm text-gray-600">
-                      Consulta y actualiza las operaciones por operador y la producción por hora
+                      Consulta las operaciones y la producción por hora (solo lectura)
                     </p>
                   </div>
                 </div>
@@ -449,8 +492,6 @@ export default function SavedRunsViewer({ onBack }) {
                 initialRows={getRowsFromData()}
                 slotTargets={getSlotTargets()}
                 cumulativeTargets={getCumulativeTargets()}
-                onUpdateHourly={handleUpdateHourlyData}
-                onAddOperation={handleAddOperation}
               />
             </div>
           )}
