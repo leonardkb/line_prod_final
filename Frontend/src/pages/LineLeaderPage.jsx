@@ -87,6 +87,7 @@ function HourlyPlanCard({
   sewedBySlot,
   onChangeSewed,
   operationName = "",
+  lockedSlots = {},
 }) {
   const totalSewed = useMemo(() => {
     let sum = 0;
@@ -119,8 +120,6 @@ function HourlyPlanCard({
             El objetivo acumulado se detiene en el último meta.
           </div>
         </div>
-
-        
       </div>
 
       <div className="mt-4 border-t pt-4 overflow-x-auto">
@@ -172,6 +171,8 @@ function HourlyPlanCard({
               {slots.map((slot, idx) => {
                 const label = slot.slot_label;
                 const v = sewedBySlot?.[label] ?? "";
+                const isLocked = lockedSlots[label];
+                
                 return (
                   <td
                     key={label}
@@ -180,14 +181,27 @@ function HourlyPlanCard({
                       ${idx === slots.length - 1 ? "border-r-0" : ""}
                     `}
                   >
-                    <input
-                      value={v}
-                      onChange={(e) => onChangeSewed(label, e.target.value)}
-                      placeholder="0"
-                      inputMode="numeric"
-                      className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm
-                                 outline-none focus:ring-2 focus:ring-gray-900/10"
-                    />
+                    <div className="relative">
+                      <input
+                        value={v}
+                        onChange={(e) => onChangeSewed(label, e.target.value)}
+                        placeholder="0"
+                        inputMode="numeric"
+                        disabled={isLocked}
+                        className={`
+                          w-28 rounded-xl border px-3 py-2 text-sm outline-none
+                          ${isLocked 
+                            ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed' 
+                            : 'bg-white border-gray-200 focus:ring-2 focus:ring-gray-900/10'
+                          }
+                        `}
+                      />
+                      {isLocked && (
+                        <span className="absolute -top-2 -right-2 text-xs bg-gray-800 text-white px-1.5 py-0.5 rounded-full">
+                          🔒
+                        </span>
+                      )}
+                    </div>
                   </td>
                 );
               })}
@@ -263,6 +277,9 @@ export default function LineLeaderPage() {
   const [latest, setLatest] = useState(null);
   const [runData, setRunData] = useState(null);
   const [sewedInputs, setSewedInputs] = useState({});
+  
+  // NEW: Locked slots state - tracks which slots are locked for each operator/operation
+  const [lockedSlots, setLockedSlots] = useState({});
 
   // State for line balancing assignments
   const [assignments, setAssignments] = useState([]);
@@ -468,18 +485,30 @@ export default function LineLeaderPage() {
       setRunData(json);
 
       const next = {};
+      // Load saved sewed data and initialize lock state
+      const initialLockedState = {};
+      
       for (const block of json.operations || []) {
         for (const op of block.operations || []) {
           const opId = op.id;
           const sewed = op.sewed_data || {};
           next[opId] = {};
+          
           for (const s of json.slots || []) {
             const label = s.slot_label;
-            next[opId][label] = sewed?.[label] ?? "";
+            const value = sewed?.[label] ?? "";
+            next[opId][label] = value;
+            
+            // Lock the slot if there's a value > 0
+            if (value && Number(value) > 0) {
+              initialLockedState[`${opId}-${label}`] = true;
+            }
           }
         }
       }
+      
       setSewedInputs(next);
+      setLockedSlots(initialLockedState);
 
       // Auto-select first time slot
       if (json.slots?.length > 0) {
@@ -575,7 +604,17 @@ export default function LineLeaderPage() {
     return map;
   }, [runData]);
 
+  // Updated handleSewedChange with lock check
   const handleSewedChange = useCallback((opId, slotLabel, value) => {
+    // Check if this slot is locked
+    const lockKey = `${opId}-${slotLabel}`;
+    if (lockedSlots[lockKey]) {
+      // Show a warning message
+      setSaveMsg("⚠️ Este valor ya está guardado y no puede modificarse");
+      setTimeout(() => setSaveMsg(""), 3000);
+      return;
+    }
+
     setSewedInputs(prev => {
       const operatorId = operationToOperatorMap.get(opId);
       if (!operatorId) {
@@ -598,7 +637,7 @@ export default function LineLeaderPage() {
       });
       return newState;
     });
-  }, [operationToOperatorMap, operatorToOperationIds]);
+  }, [operationToOperatorMap, operatorToOperationIds, lockedSlots]);
 
   useEffect(() => {
     if (!runData || !operatorToOperationIds.size) return;
@@ -637,8 +676,39 @@ export default function LineLeaderPage() {
     const opIds = operatorToOperationIds.get(operatorId) || [];
     if (opIds.length === 0) return '';
     
+    // Try to get from primary operation first
     const primaryOpId = opIds[0];
-    return sewedInputs[primaryOpId]?.[slotLabel] || '';
+    const value = sewedInputs[primaryOpId]?.[slotLabel];
+    
+    // If primary operation doesn't have a value, check other operations
+    if (!value && opIds.length > 1) {
+      for (const opId of opIds) {
+        const val = sewedInputs[opId]?.[slotLabel];
+        if (val) return val;
+      }
+    }
+    
+    return value || '';
+  };
+
+  // Check if a slot is locked for an operator
+  const isSlotLocked = (operatorId, slotLabel) => {
+    const opIds = operatorToOperationIds.get(operatorId) || [];
+    if (opIds.length === 0) return false;
+    const primaryOpId = opIds[0];
+    return lockedSlots[`${primaryOpId}-${slotLabel}`] || false;
+  };
+
+  // Calculate total cumulative for an operator across all slots (based on actual inputs)
+  const getOperatorTotalCumulative = (operatorId) => {
+    let cumulative = 0;
+    if (!runData?.slots) return cumulative;
+    
+    for (const slot of runData.slots) {
+      const slotValue = getOperatorValueForSlot(operatorId, slot.slot_label);
+      cumulative += Number(slotValue) || 0;
+    }
+    return cumulative;
   };
 
   // ========== TOTAL FOR ALL OPERATIONS ==========
@@ -693,6 +763,7 @@ export default function LineLeaderPage() {
     };
   }, [sewedInputs]);
 
+  // Updated handleSave to lock saved values
   async function handleSave() {
     if (!runData?.run?.id) return;
 
@@ -742,10 +813,27 @@ export default function LineLeaderPage() {
         return;
       }
 
+      // After successful save, lock all non-zero values
+      const newLockedState = { ...lockedSlots };
+      for (const block of runData.operations || []) {
+        for (const op of block.operations || []) {
+          const opId = op.id;
+          for (const s of slots) {
+            const slotLabel = s.slot_label;
+            const value = sewedInputs?.[opId]?.[slotLabel];
+            const lockKey = `${opId}-${slotLabel}`;
+            if (value && Number(value) > 0) {
+              newLockedState[lockKey] = true;
+            }
+          }
+        }
+      }
+      setLockedSlots(newLockedState);
+
       updateLastSavedTime();
       setAlarmVisible(false);
 
-      setSaveMsg("✅ Actualizaciones por hora guardadas");
+      setSaveMsg("✅ Actualizaciones por hora guardadas y bloqueadas");
       await fetchRunData(runId);
       await fetchAssignments(runId);
     } catch (e) {
@@ -1041,13 +1129,14 @@ export default function LineLeaderPage() {
               )}
             </>
           ) : (
-            // SIMPLIFIED TIME-BASED OPERATIONS SECTION
+            // SIMPLIFIED TIME-BASED OPERATIONS SECTION WITH LOCKING
             <div className="space-y-4">
-              {/* Time Slot Selection Cards */}
+              {/* Time Slot Selection Cards with cumulative meta */}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
                 {slots.map((slot) => {
                   const isSelected = selectedTimeSlot === slot.slot_label;
                   const slotTarget = slotTargetsMap[slot.slot_label]?.slot_target || 0;
+                  const cumulativeTarget = slotTargetsMap[slot.slot_label]?.cumulative_target || 0;
                   
                   return (
                     <button
@@ -1065,12 +1154,15 @@ export default function LineLeaderPage() {
                       <div className={`text-xs mt-1 ${isSelected ? 'text-gray-300' : 'text-gray-500'}`}>
                         Meta: {Math.round(slotTarget)}
                       </div>
+                      <div className={`text-xs font-semibold mt-1 ${isSelected ? 'text-gray-300' : 'text-gray-700'}`}>
+                        Acum: {Math.round(cumulativeTarget)}
+                      </div>
                     </button>
                   );
                 })}
               </div>
 
-              {/* Selected Time Slot Data Entry Section - Clean like the image */}
+              {/* Selected Time Slot Data Entry Section - with cumulative based on actual inputs */}
               {selectedTimeSlot && (
                 <div className="rounded-3xl border bg-white shadow-sm overflow-hidden">
                   <div className="p-6">
@@ -1081,45 +1173,73 @@ export default function LineLeaderPage() {
                       <p className="text-sm text-gray-600 mt-1">
                         Ingresa las piezas cosidas en cada bloque horario
                       </p>
+                      <p className="text-xs text-gray-500 mt-2">
+                        🔒 Los valores guardados no pueden modificarse
+                      </p>
                     </div>
 
-                    {/* Clean operator input grid with operator number and name */}
+                    {/* Clean operator input grid with operator number, name, capacity, and cumulative total based on actual inputs */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
                       {operatorsList.map((op) => {
                         const operatorId = op.id;
                         const currentValue = getOperatorValueForSlot(operatorId, selectedTimeSlot);
+                        const isLocked = isSlotLocked(operatorId, selectedTimeSlot);
+                        
+                        // Get operator's block for capacity info
+                        const operatorBlock = runData?.operations?.find(b => b.operator?.id === operatorId);
+                        const firstOperation = operatorBlock?.operations?.[0];
+                        const capacity = firstOperation?.capacity_per_hour || 0;
+                        
+                        // Calculate cumulative total for this operator based on ALL inputs across all slots
+                        const cumulativeTotal = getOperatorTotalCumulative(operatorId);
                         
                         return (
-                          <div key={op.id} className="flex flex-col items-center">
+                          <div key={op.id} className="flex flex-col items-center relative">
                             <div className="text-xl font-semibold text-gray-900">
                               Op. {op.operator_no}
                             </div>
-                            <div className="text-sm text-gray-600 mb-2 text-center">
+                            <div className="text-sm text-gray-600 mb-1 text-center">
                               {op.operator_name || 'Sin nombre'}
                             </div>
-                            <input
-                              type="number"
-                              value={currentValue}
-                              onChange={(e) => handleTimeSlotChange(
-                                operatorId,
-                                selectedTimeSlot,
-                                e.target.value
+                            <div className="text-xs font-medium text-blue-600 mb-2">
+                              Cap: {capacity} pcs/h
+                            </div>
+                            <div className="relative">
+                              <input
+                                type="number"
+                                value={currentValue}
+                                onChange={(e) => handleTimeSlotChange(
+                                  operatorId,
+                                  selectedTimeSlot,
+                                  e.target.value
+                                )}
+                                placeholder="0"
+                                disabled={isLocked}
+                                className={`
+                                  w-24 h-24 rounded-2xl border-2 text-center
+                                  text-3xl font-bold outline-none transition-all
+                                  ${isLocked 
+                                    ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed' 
+                                    : 'border-gray-200 focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400'
+                                  }
+                                `}
+                                min="0"
+                              />
+                              {isLocked && (
+                                <span className="absolute -top-2 -right-2 text-xs bg-gray-800 text-white px-1.5 py-0.5 rounded-full">
+                                  🔒
+                                </span>
                               )}
-                              placeholder="0"
-                              className="w-24 h-24 rounded-2xl border-2 border-gray-200 text-center
-                                       text-3xl font-bold outline-none focus:ring-2 
-                                       focus:ring-gray-900/10 focus:border-gray-400"
-                              min="0"
-                            />
-                            <div className="text-sm text-gray-500 mt-2">
-                              Meta: {Math.round(slotTargetsMap[selectedTimeSlot]?.slot_target || 0)}
+                            </div>
+                            <div className="text-sm font-semibold text-gray-700 mt-2">
+                              Total acumulado: {cumulativeTotal}
                             </div>
                           </div>
                         );
                       })}
                     </div>
 
-                    {/* Collapsible operations details */}
+                    {/* Collapsible operations details - also showing capacity */}
                     <details className="mt-8">
                       <summary className="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">
                         ► Ver todas las operaciones de este operador
@@ -1127,16 +1247,32 @@ export default function LineLeaderPage() {
                       <div className="mt-4 space-y-4 border-t pt-4">
                         {operatorsList.map((op) => {
                           const block = runData?.operations?.find(b => b.operator?.id === op.id);
+                          
+                          // Calculate operator cumulative total across all slots
+                          const operatorCumulativeTotal = getOperatorTotalCumulative(op.id);
+                          
                           return (
                             <div key={op.id} className="bg-gray-50 rounded-xl p-4">
-                              <div className="font-semibold text-gray-900 mb-2">Operador {op.operator_no} - {op.operator_name}</div>
+                              <div className="flex justify-between items-center mb-2">
+                                <div className="font-semibold text-gray-900">
+                                  Operador {op.operator_no} - {op.operator_name}
+                                </div>
+                                <div className="text-sm bg-gray-200 px-3 py-1 rounded-full">
+                                  Total acumulado: {operatorCumulativeTotal} pcs
+                                </div>
+                              </div>
                               <div className="space-y-2">
                                 {block?.operations?.map((operation) => {
                                   const opTotal = getOperationTotal(operation.id);
                                   return (
                                     <div key={operation.id} className="flex justify-between items-center text-sm">
                                       <span className="text-gray-600">{operation.operation_name}</span>
-                                      <span className="font-medium text-gray-900">{opTotal} pcs</span>
+                                      <div className="flex items-center gap-4">
+                                        <span className="text-xs text-gray-500">
+                                          Cap: {operation.capacity_per_hour || 0} pcs/h
+                                        </span>
+                                        <span className="font-medium text-gray-900">{opTotal} pcs</span>
+                                      </div>
                                     </div>
                                   );
                                 })}
