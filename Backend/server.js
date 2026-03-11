@@ -45,7 +45,7 @@ const createAllTables = async () => {
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT chk_role CHECK (role IN ('engineer', 'line_leader', 'supervisor')),
+        CONSTRAINT chk_role CHECK (role IN ('engineer', 'line_leader', 'supervisor', 'soporte_it')),
         CONSTRAINT chk_line_number CHECK (line_number IS NULL OR (line_number >= 1 AND line_number <= 26))
       );
     `);
@@ -255,6 +255,14 @@ const createDefaultUsers = async (client) => {
         full_name: `Line ${i} Leader`,
       });
     }
+
+    // Add soporte_it user
+defaultUsers.push({
+  username: "soporte_it",
+  password: "soporte123",
+  role: "soporte_it",
+  full_name: "Soporte IT",
+});
 
     // Add a supervisor
     defaultUsers.push({
@@ -2110,6 +2118,11 @@ app.get("/api/run-capacity-history/:runId", authenticateToken, async (req, res) 
   }
 });
 
+
+
+
+
+
 // --------------------------------------------------------------
 // SUPERVISOR DASHBOARD ENDPOINTS (FIXED)
 // --------------------------------------------------------------
@@ -2408,7 +2421,151 @@ app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor
   }
 });
 
+// ========== add / delete operator ==========
 
+app.post("/api/run/:runId/operators", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+
+    const { runId } = req.params;
+    const { operatorNo, operatorName } = req.body;
+
+    if (!operatorNo) {
+      return res.status(400).json({
+        success: false,
+        error: "Operator number is required",
+      });
+    }
+
+    // Check if operator already exists in this run
+    const existingOp = await client.query(
+      `SELECT id FROM run_operators 
+       WHERE run_id = $1 AND operator_no = $2`,
+      [runId, parseInt(operatorNo)]
+    );
+
+    if (existingOp.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Operator ${operatorNo} already exists in this run`,
+      });
+    }
+
+    // Insert new operator
+    const result = await client.query(
+      `INSERT INTO run_operators (run_id, operator_no, operator_name, created_at)
+       VALUES ($1, $2, $3, NOW())
+       RETURNING id, operator_no, operator_name`,
+      [runId, parseInt(operatorNo), operatorName || null]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: `Operator ${operatorNo} added successfully`,
+      operator: result.rows[0],
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error adding operator:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ✅ Delete an operator from an existing run
+app.delete("/api/run/:runId/operators/:operatorId", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+
+    const { runId, operatorId } = req.params;
+
+    // Check if operator exists and belongs to this run
+    const operatorCheck = await client.query(
+      `SELECT id, operator_no FROM run_operators 
+       WHERE id = $1 AND run_id = $2`,
+      [operatorId, runId]
+    );
+
+    if (operatorCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Operator not found in this run",
+      });
+    }
+
+    const operatorNo = operatorCheck.rows[0].operator_no;
+
+    // Delete operator (cascades to operations and hourly entries due to foreign keys)
+    await client.query(
+      `DELETE FROM run_operators WHERE id = $1`,
+      [operatorId]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: `Operator ${operatorNo} deleted successfully`,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error deleting operator:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ✅ Get all operators for a run (with their operations count)
+app.get("/api/run/:runId/operators", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+
+    const { runId } = req.params;
+
+    const result = await client.query(
+      `SELECT 
+        ro.id,
+        ro.operator_no,
+        ro.operator_name,
+        ro.created_at,
+        COUNT(oo.id) as operations_count
+       FROM run_operators ro
+       LEFT JOIN operator_operations oo ON ro.id = oo.run_operator_id
+       WHERE ro.run_id = $1
+       GROUP BY ro.id
+       ORDER BY ro.operator_no`,
+      [runId]
+    );
+
+    res.json({
+      success: true,
+      operators: result.rows,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching operators:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
 
 // ========== ENGINEER LINE BALANCING ==========
 
