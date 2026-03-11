@@ -15,6 +15,26 @@ function toYMD(d) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Helper function to calculate finished garments (similar to LineLeaderPage)
+const calculateFinishedGarments = (runData) => {
+  if (!runData) return 0;
+  let total = 0;
+  const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished'];
+  
+  for (const block of runData.operations || []) {
+    for (const op of block.operations || []) {
+      const opName = (op.operation_name || '').toLowerCase();
+      if (packingKeywords.some(keyword => opName.includes(keyword))) {
+        const sewedData = op.sewed_data || {};
+        for (const qty of Object.values(sewedData)) {
+          total += Number(qty) || 0;
+        }
+      }
+    }
+  }
+  return total;
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -28,6 +48,7 @@ export default function Dashboard() {
 
   const [globalRealtimeTarget, setGlobalRealtimeTarget] = useState(0);
   const [lineRealtimeTargets, setLineRealtimeTargets] = useState({});
+  const [lineEfficiencies, setLineEfficiencies] = useState({}); // New state for line efficiencies
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
   const [hoveredCard, setHoveredCard] = useState(null);
@@ -104,26 +125,47 @@ export default function Dashboard() {
       const headers = { Authorization: `Bearer ${token}` };
       const newRunData = {};
       const newTargets = {};
+      const newEfficiencies = {}; // New object for line efficiencies
+      
       for (const line of lineData) {
         try {
           const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
           if (!runsRes.data.success) continue;
           const run = runsRes.data.runs.find(r => toYMD(r.run_date) === date);
           if (!run) continue;
+          
           const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
           if (!detailRes.data.success) continue;
+          
           newRunData[line.lineNo] = detailRes.data;
           const rt = computeRealtimeTarget(detailRes.data, date);
           newTargets[line.lineNo] = rt;
+          
+          // Calculate efficiency for this line using finished garments
+          const finishedGarments = calculateFinishedGarments(detailRes.data);
+          const operatorsCount = detailRes.data.operators?.length || 0;
+          const workingHours = detailRes.data.run?.working_hours || 0;
+          const sam = detailRes.data.run?.sam_minutes || 0;
+          
+          const availableMinutes = operatorsCount * workingHours * 60;
+          const totalSAMOutput = finishedGarments * sam;
+          const efficiency = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
+          
+          newEfficiencies[line.lineNo] = Math.round(efficiency * 100) / 100;
+          
         } catch (err) {
           console.error(`Error fetching details for line ${line.lineNo}:`, err);
         }
       }
+      
       setLineRunData(newRunData);
       setLineRealtimeTargets(newTargets);
+      setLineEfficiencies(newEfficiencies); // Set line efficiencies
+      
       const sum = Object.values(newTargets).reduce((a, b) => a + b, 0);
       setGlobalRealtimeTarget(sum);
     };
+    
     fetchLineDetails();
   }, [lineData, date]);
 
@@ -156,6 +198,7 @@ export default function Dashboard() {
     fetchDashboardData(newDate);
     setLineRunData({});
     setLineRealtimeTargets({});
+    setLineEfficiencies({}); // Clear efficiencies when date changes
   };
 
   const formatNumber = (value) => {
@@ -193,6 +236,13 @@ export default function Dashboard() {
       return 'bg-green-500';
     }
     return 'bg-gray-400';
+  };
+
+  // Get efficiency dot color for line cards
+  const getEfficiencyDotColor = (eff) => {
+    if (eff < 60) return 'bg-red-500';
+    if (eff < 80) return 'bg-yellow-500';
+    return 'bg-green-500';
   };
 
   if (!user) {
@@ -338,7 +388,8 @@ export default function Dashboard() {
             </div>
 
             {/* Real‑time Efficiency con indicador */}
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl
+             transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
                 <div className="w-full">
                   <div className="flex items-center gap-2 mb-1">
@@ -346,7 +397,7 @@ export default function Dashboard() {
                       globalRealtimeTarget > 0 ? (summary.totalSewed / globalRealtimeTarget) * 100 : 0,
                       'realtimeEfficiency'
                     )}`}></span>
-                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Real‑time Efficiency</p>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Real‑time Target Acheivement</p>
                   </div>
                   <p className="text-3xl font-bold text-gray-900">
                     {globalRealtimeTarget > 0
@@ -380,7 +431,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Line Performance Chart */}
+        {/* Line Performance Chart with Efficiency */}
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-8 border border-gray-100">
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -388,7 +439,7 @@ export default function Dashboard() {
                 Resumen del Desempeño por Línea
               </h2>
               <p className="text-sm text-gray-500 mt-1">
-                Producción vs Objetivo para{" "}
+                Producción, Objetivo y Eficiencia para{" "}
                 {new Date(date).toLocaleDateString('es-MX', {
                   weekday: 'long',
                   year: 'numeric',
@@ -411,7 +462,8 @@ export default function Dashboard() {
                     data={lineData.map(line => ({
                       lineNo: line.lineNo,
                       totalSewed: line.totalSewed,
-                      realtimeTarget: lineRealtimeTargets[line.lineNo] || 0
+                      realtimeTarget: lineRealtimeTargets[line.lineNo] || 0,
+                      efficiency: lineEfficiencies[line.lineNo] || 0 // Add efficiency to chart data
                     }))}
                     margin={{ top: 20, right: 30, left: 20, bottom: isMobile ? 70 : 40 }}
                   >
@@ -432,8 +484,20 @@ export default function Dashboard() {
                       tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
                       label={{ value: 'Cantidad', angle: -90, position: 'insideLeft', fill: '#6b7280' }}
                     />
+                    {/* New YAxis for efficiency on the right */}
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tickFormatter={(value) => `${value}%`}
+                      stroke="#10b981"
+                      tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
+                      label={{ value: 'Eficiencia %', angle: 90, position: 'insideRight', fill: '#6b7280' }}
+                    />
                     <Tooltip
-                      formatter={(value) => formatNumber(value)}
+                      formatter={(value, name) => {
+                        if (name === 'Eficiencia %') return [`${value}%`, name];
+                        return [formatNumber(value), name];
+                      }}
                       contentStyle={{
                         backgroundColor: 'rgba(255,255,255,0.95)',
                         borderRadius: '12px',
@@ -466,6 +530,18 @@ export default function Dashboard() {
                       activeDot={{ r: 8, fill: "#8b5cf6", stroke: "white", strokeWidth: 2 }}
                       name="Objetivo (ahora)"
                     />
+
+                    {/* New Line for efficiency */}
+                    <Line
+                      yAxisId="right"
+                      type="monotone"
+                      dataKey="efficiency"
+                      stroke="#10b981"
+                      strokeWidth={2}
+                      dot={{ r: isMobile ? 3 : 4, fill: "#10b981", strokeWidth: 2, stroke: "white" }}
+                      activeDot={{ r: 6, fill: "#10b981", stroke: "white", strokeWidth: 2 }}
+                      name="Eficiencia %"
+                    />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -494,7 +570,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Line Cards – with real‑time achievement indicator */}
+        {/* Line Cards – with efficiency and real‑time achievement indicator */}
         {!loading && lineData.length > 0 && (
           <div className="mt-8">
             <div className="flex items-center justify-between mb-6">
@@ -530,6 +606,7 @@ export default function Dashboard() {
                 const variancePct = realtimeTarget > 0 ? (variance / realtimeTarget) * 100 : 0;
                 const status = getLineStatus(variancePct, realtimeTarget);
                 const achievementPct = realtimeTarget > 0 ? (sewed / realtimeTarget) * 100 : 0;
+                const efficiency = lineEfficiencies[line.lineNo] || 0; // Get line efficiency
 
                 const statusColors = {
                   red: 'border-red-500 bg-red-50',
@@ -568,6 +645,15 @@ export default function Dashboard() {
                     </div>
 
                     <div className="p-5">
+                      {/* Efficiency section at the top */}
+                      <div className="mb-4 flex items-center justify-between bg-gray-50 rounded-xl p-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-3 h-3 rounded-full ${getEfficiencyDotColor(efficiency)}`}></span>
+                          <span className="text-sm font-medium text-gray-700">Eficiencia</span>
+                        </div>
+                        <span className="text-lg font-bold text-gray-900">{efficiency.toFixed(1)}%</span>
+                      </div>
+
                       <div className="mb-4">
                         <div className="flex justify-between text-xs mb-1">
                           <span className="text-gray-600">Progreso (ahora)</span>

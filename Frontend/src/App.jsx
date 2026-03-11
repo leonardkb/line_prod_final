@@ -1,8 +1,3 @@
-
-
-
-
-
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import PlannerPage from "./pages/PlannerPage";
 import LoginPage from "./components/LoginPage";
@@ -11,6 +6,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import LineLeaderPage from "./pages/LineLeaderPage";
 import Dashboard from "./pages/Dashboard";
 import LineBalancing from "./pages/LineBalancing";
+import LineTvDashboard from "./pages/LineTvDashboard";
 
 
 
@@ -25,6 +21,7 @@ export default function App() {
          <Route path="/admin" element={<Dashboard />} />
         <Route path="/lineleader" element={<LineLeaderPage />} />
         <Route path="/line-balancing" element={<LineBalancing />} /> {/* catch-all route */}
+        <Route path="/line-tv" element={<LineTvDashboard />} /> {/* catch-all route */}
       </Routes>
     </Router>
   );

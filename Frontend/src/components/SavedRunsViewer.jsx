@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import MetaSummary from "./MetaSummary";
 import ViewEditOperationPlanner from "./ViewEditOperationPlanner";
+import AddOperatorModal from "./AddOperatorModal";
+import DeleteOperatorModal from "./DeleteOperatorModal";
 
 // Helper to ensure dates are compared as YYYY-MM-DD strings
 const normalizeDate = (dateStr) => {
@@ -23,6 +25,11 @@ export default function SavedRunsViewer({ onBack }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [activePanel, setActivePanel] = useState("select"); // select, summary, operations
+  
+  // Operators state
+  const [operators, setOperators] = useState([]);
+  const [showAddOperator, setShowAddOperator] = useState(false);
+  const [operatorToDelete, setOperatorToDelete] = useState(null);
 
   // Copy dialog state
   const [copyDialog, setCopyDialog] = useState({ open: false, run: null });
@@ -60,6 +67,24 @@ export default function SavedRunsViewer({ onBack }) {
     }
   };
 
+  // Fetch operators for the current run
+  const fetchOperators = async (runId) => {
+    try {
+      const token = localStorage.getItem("token");
+      const response = await fetch(`http://localhost:5000/api/run/${runId}/operators`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setOperators(data.operators);
+      }
+    } catch (err) {
+      console.error("Error fetching operators:", err);
+    }
+  };
+
   const handleSelectRun = async (runId) => {
     setLoading(true);
     setMessage("");
@@ -76,6 +101,7 @@ export default function SavedRunsViewer({ onBack }) {
       if (data.success) {
         setSelectedRun(runId);
         setRunData(data);
+        await fetchOperators(runId);
         setActivePanel("summary");
       } else {
         setMessage(`❌ Error: ${data.error}`);
@@ -84,6 +110,26 @@ export default function SavedRunsViewer({ onBack }) {
       setMessage(`❌ No se pudo cargar la corrida: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handle operator added
+  const handleOperatorAdded = (newOperator) => {
+    setOperators([...operators, { ...newOperator, operations_count: 0 }]);
+    setMessage(`✅ Operador ${newOperator.operator_no} agregado correctamente`);
+    // Refresh the run data to get updated operations
+    if (selectedRun) {
+      handleSelectRun(selectedRun);
+    }
+  };
+
+  // Handle operator deleted
+  const handleOperatorDeleted = (deletedOperatorId) => {
+    setOperators(operators.filter(op => op.id !== deletedOperatorId));
+    setMessage(`✅ Operador eliminado correctamente`);
+    // Refresh the run data to get updated operations
+    if (selectedRun) {
+      handleSelectRun(selectedRun);
     }
   };
 
@@ -393,6 +439,7 @@ export default function SavedRunsViewer({ onBack }) {
                     setActivePanel("select");
                     setSelectedRun(null);
                     setRunData(null);
+                    setOperators([]);
                   }}
                   className="rounded-xl px-4 py-2 text-sm font-medium border border-gray-200 hover:bg-gray-50"
                 >
@@ -421,28 +468,43 @@ export default function SavedRunsViewer({ onBack }) {
                 />
               </div>
 
-              {/* Lista de operadores */}
+              {/* Lista de operadores con opciones de agregar/eliminar */}
               <div className="rounded-2xl border bg-white shadow-sm">
-                <div className="px-5 py-4 border-b">
-                  <h2 className="font-semibold text-gray-900">Operadores asignados</h2>
-                  <p className="text-sm text-gray-600">
-                    {runData.operators?.length || 0} operador(es) asignado(s)
-                  </p>
+                <div className="px-5 py-4 border-b flex items-center justify-between">
+                  <div>
+                    <h2 className="font-semibold text-gray-900">Operadores asignados</h2>
+                    <p className="text-sm text-gray-600">
+                      {operators.length || 0} operador(es) asignado(s)
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowAddOperator(true)}
+                    className="text-sm bg-gray-900 text-white px-3 py-1.5 rounded-xl hover:bg-gray-800"
+                  >
+                    + Agregar operador
+                  </button>
                 </div>
 
-                <div className="p-5">
-                  {runData.operators && runData.operators.length > 0 ? (
+                <div className="p-5 max-h-[500px] overflow-y-auto">
+                  {operators && operators.length > 0 ? (
                     <div className="space-y-3">
-                      {runData.operators.map((operator) => (
+                      {operators.map((operator) => (
                         <div key={operator.id} className="rounded-lg border border-gray-200 p-4">
                           <div className="flex items-center justify-between mb-2">
                             <div className="font-semibold text-gray-900">
                               Operador {operator.operator_no}
                             </div>
-                            <div className="text-sm text-gray-600">
-                              {runData.operations.find((op) => op.operator.id === operator.id)
-                                ?.operations.length || 0}{" "}
-                              operaciones
+                            <div className="flex items-center gap-3">
+                              <div className="text-sm text-gray-600">
+                                {operator.operations_count || 0} operaciones
+                              </div>
+                              <button
+                                onClick={() => setOperatorToDelete(operator)}
+                                className="text-sm text-red-600 hover:text-red-800"
+                                title="Eliminar operador"
+                              >
+                                ✕
+                              </button>
                             </div>
                           </div>
 
@@ -496,6 +558,25 @@ export default function SavedRunsViewer({ onBack }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* Add Operator Modal */}
+      {showAddOperator && selectedRun && (
+  <AddOperatorModal
+    runId={selectedRun}
+    slots={getSlotsFromData()}  // Add this line
+    onClose={() => setShowAddOperator(false)}
+    onOperatorAdded={handleOperatorAdded}
+  />
+)}
+
+      {/* Delete Operator Modal */}
+      {operatorToDelete && (
+        <DeleteOperatorModal
+          operator={{ ...operatorToDelete, run_id: selectedRun }}
+          onClose={() => setOperatorToDelete(null)}
+          onOperatorDeleted={handleOperatorDeleted}
+        />
       )}
     </div>
   );

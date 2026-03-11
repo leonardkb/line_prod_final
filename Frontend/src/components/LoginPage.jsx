@@ -38,6 +38,8 @@ export default function LoginPage() {
         navigate("/lineleader", { replace: true });
       } else if (roleNorm === "supervisor") {
         navigate("/admin", { replace: true });
+      } else if (user.role === 'soporte_it') {
+        navigate('/line-tv', { replace: true }); // Redirect soporte_it to LineTvDashboard
       } else {
         navigate("/planner", { replace: true });
       }
