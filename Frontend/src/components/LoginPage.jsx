@@ -42,8 +42,12 @@ export default function LoginPage() {
         navigate("/admin", { replace: true });
       } else if (user.role === 'soporte_it') {
         navigate('/line-tv', { replace: true }); // Redirect soporte_it to LineTvDashboard
-      } else {
+      } else if(roleNorm === "engineer") {
         navigate("/planner", { replace: true });
+      }else if(roleNorm === "skyrina") {
+        navigate("/skyrina", { replace: true });
+      }else {
+        navigate("/", { replace: true });
       }
 
     } catch (err) {

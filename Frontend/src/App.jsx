@@ -7,6 +7,7 @@ import LineLeaderPage from "./pages/LineLeaderPage";
 import Dashboard from "./pages/Dashboard";
 import LineBalancing from "./pages/LineBalancing";
 import LineTvDashboard from "./pages/LineTvDashboard";
+import SkyrinaDashboard from "./pages/SkyrinaDashboard";
 
 
 
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/lineleader" element={<LineLeaderPage />} />
         <Route path="/line-balancing" element={<LineBalancing />} /> {/* catch-all route */}
         <Route path="/line-tv" element={<LineTvDashboard />} /> {/* catch-all route */}
+        <Route path="/skyrina" element={<SkyrinaDashboard />}/> 
       </Routes>
     </Router>
   );

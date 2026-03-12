@@ -45,7 +45,7 @@ const createAllTables = async () => {
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT chk_role CHECK (role IN ('engineer', 'line_leader', 'supervisor', 'soporte_it')),
+        CONSTRAINT chk_role CHECK (role IN ('engineer', 'line_leader', 'supervisor', 'soporte_it','skyrina')),
         CONSTRAINT chk_line_number CHECK (line_number IS NULL OR (line_number >= 1 AND line_number <= 26))
       );
     `);
@@ -263,6 +263,14 @@ defaultUsers.push({
   role: "soporte_it",
   full_name: "Soporte IT",
 });
+
+// Add skyrina user with password skyrina26
+    defaultUsers.push({
+      username: "skyrina",
+      password: "skyrina26",
+      role: "skyrina",
+      full_name: "Skyrina Dashboard User",
+    });
 
     // Add a supervisor
     defaultUsers.push({
@@ -730,7 +738,8 @@ app.post("/api/save-operations", async (req, res) => {
 
 // ✅ User management endpoints (for engineers/supervisors only)
 const requireEngineerOrSupervisor = (req, res, next) => {
-  if (req.user.role !== "engineer" && req.user.role !== "supervisor") {
+  if (req.user.role !== "engineer" && req.user.role !== "supervisor" 
+    && req.user.role !== "soporte_it" && req.user.role !== "skyrina") {
     return res.status(403).json({
       success: false,
       error: "Access denied. Engineer or supervisor role required.",
@@ -753,7 +762,9 @@ app.get("/api/users", authenticateToken, requireEngineerOrSupervisor, async (req
           WHEN 'engineer' THEN 1
           WHEN 'supervisor' THEN 2
           WHEN 'line_leader' THEN 3
-          ELSE 4
+          WHEN 'soporte_it' THEN 4
+          WHEN 'skyrina' THEN 5
+          ELSE 6
         END,
         line_number NULLS FIRST,
         username
@@ -790,11 +801,11 @@ app.post("/api/users", authenticateToken, requireEngineerOrSupervisor, async (re
     }
 
     // Validate role
-    const validRoles = ["engineer", "line_leader", "supervisor"];
+    const validRoles = ["engineer", "line_leader", "supervisor", "soporte_it", "skyrina"];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
         success: false,
-        error: "Invalid role. Must be 'engineer', 'line_leader', or 'supervisor'",
+        error: "Invalid role. Must be 'engineer', 'line_leader', 'supervisor', 'soporte_it', or 'skyrina'",
       });
     }
 
@@ -2128,7 +2139,7 @@ app.get("/api/run-capacity-history/:runId", authenticateToken, async (req, res) 
 // --------------------------------------------------------------
 
 const requireSupervisor = (req, res, next) => {
-  if (req.user.role !== "supervisor") {
+  if (req.user.role !== "supervisor" && req.user.role !== "skyrina") {
     return res.status(403).json({
       success: false,
       error: "Access denied. Supervisor role required.",
