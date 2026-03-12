@@ -170,35 +170,53 @@ export default function LineTvDashboard() {
     }
   }, [lineNo, date]);
 
-  const computeRealtimeTarget = (runData, selectedDate) => {
-    if (!runData || !selectedDate) return 0;
-    const now = new Date();
-    const todayStr = selectedDate;
-    const slots = (runData.slots || [])
-      .map(slot => {
-        const start = new Date(`${todayStr}T${slot.slot_start}`);
-        const end = new Date(`${todayStr}T${slot.slot_end}`);
-        return { ...slot, start, end };
-      })
-      .filter(s => s.start && s.end);
-    let cumulative = 0;
-    for (const slot of slots) {
-      const slotTarget = (runData.slotTargets || []).find(
-        st => st.slot_label === slot.slot_label
-      )?.slot_target || 0;
-      if (now >= slot.end) {
-        cumulative += Number(slotTarget);
-      } else if (now >= slot.start && now < slot.end) {
-        const elapsed = (now - slot.start) / (slot.end - slot.start);
-        cumulative += Number(slotTarget) * elapsed;
-        break;
-      } else {
-        break;
-      }
-    }
-    return Math.round(cumulative * 100) / 100;
-  };
-
+ const computeRealtimeTarget = (runData, selectedDate) => {
+  if (!runData || !selectedDate) return 0;
+  
+  const now = new Date();
+  const todayStr = selectedDate;
+  
+  // Production timeline: 8:00 AM to 5:36 PM
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  
+  // Get slots with their end times
+  const slots = (runData.slots || [])
+    .map(slot => {
+      const end = new Date(`${todayStr}T${slot.slot_end}`);
+      return { ...slot, end };
+    })
+    .filter(s => s.end);
+  
+  // Find the latest end time from slots (should be 17:36:00)
+  const PRODUCTION_END = slots.length > 0 
+    ? new Date(Math.max(...slots.map(s => s.end.getTime())))
+    : new Date(`${todayStr}T17:36:00`);
+  
+  // Get total target
+  const totalTarget = runData.run?.target_pcs || 0;
+  
+  // If production hasn't started yet (before 8:00 AM)
+  if (now < PRODUCTION_START) {
+    return 0;
+  }
+  
+  // If production is complete (after 5:36 PM)
+  if (now >= PRODUCTION_END) {
+    return totalTarget;
+  }
+  
+  // Calculate real-time target based on time elapsed since 8:00 AM
+  const elapsedMilliseconds = now - PRODUCTION_START;
+  const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
+  
+  if (totalProductionMilliseconds > 0) {
+    const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
+    const cumulative = totalTarget * progressRatio;
+    return Math.min(Math.round(cumulative * 100) / 100, totalTarget);
+  }
+  
+  return 0;
+};
   const fetchLineData = async (line, selectedDate, isRefresh = false) => {
     if (!line || !selectedDate) return;
     

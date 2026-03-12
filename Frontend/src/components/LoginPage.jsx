@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import SplashScreen from "./SplashScreen";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [showSplash, setShowSplash] = useState(true);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -59,6 +61,11 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+
+  // If splash screen is showing, render it
+  if (showSplash) {
+    return <SplashScreen onFinish={() => setShowSplash(false)} />;
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4">
@@ -141,7 +148,7 @@ export default function LoginPage() {
           >
             Verificar estado del servidor
           </button>
-          <h12 className="block mt-1 text-gray-400">developed by Leonard</h12>
+          <p className="block mt-1 text-gray-400">developed by LK</p>
         </div>
       </div>
     </div>

@@ -844,43 +844,62 @@ export default function LineLeaderPage() {
   }
 
   // ========== Real‑time target calculation ==========
-  useEffect(() => {
-    if (!runData || !slots.length || !slotTargetsMap || !target) return;
+// ========== Real‑time target calculation (from 8:00 AM) ==========
+useEffect(() => {
+  if (!runData || !slots.length || !slotTargetsMap || !target) return;
 
-    const calculateRealtime = () => {
-      const now = new Date();
-      const dateStr = header.date ? header.date.split('T')[0] : new Date().toISOString().split('T')[0];
+  const calculateRealtime = () => {
+    const now = new Date();
+    const dateStr = header.date ? header.date.split('T')[0] : new Date().toISOString().split('T')[0];
+    
+    // Production timeline: 8:00 AM to 5:36 PM
+    const PRODUCTION_START = new Date(`${dateStr}T08:00:00`);
+    
+    // Get the last slot end time (should be 17:36:00)
+    const slotsWithTime = slots
+      .map(slot => {
+        if (!slot.slot_start || !slot.slot_end) return null;
+        const start = new Date(`${dateStr}T${slot.slot_start}`);
+        const end = new Date(`${dateStr}T${slot.slot_end}`);
+        return { ...slot, start, end };
+      })
+      .filter(s => s !== null);
+    
+    // Find the latest end time from slots (should be 17:36:00)
+    const PRODUCTION_END = slotsWithTime.length > 0 
+      ? new Date(Math.max(...slotsWithTime.map(s => s.end.getTime())))
+      : new Date(`${dateStr}T17:36:00`);
 
-      const slotsWithTime = slots
-        .map(slot => {
-          if (!slot.slot_start || !slot.slot_end) return null;
-          const start = new Date(`${dateStr}T${slot.slot_start}`);
-          const end = new Date(`${dateStr}T${slot.slot_end}`);
-          return { ...slot, start, end };
-        })
-        .filter(s => s !== null);
-
-      let cumulative = 0;
-      for (const slot of slotsWithTime) {
-        const slotTarget = slotTargetsMap[slot.slot_label]?.slot_target || 0;
-        if (now >= slot.end) {
-          cumulative += Number(slotTarget);
-        } else if (now >= slot.start && now < slot.end) {
-          const elapsed = (now - slot.start) / (slot.end - slot.start);
-          cumulative += Number(slotTarget) * elapsed;
-          break;
-        } else {
-          break;
-        }
-      }
-      setRealTimeTarget(Math.round(cumulative * 100) / 100);
+    // If production hasn't started yet (before 8:00 AM)
+    if (now < PRODUCTION_START) {
+      setRealTimeTarget(0);
+      setRealTimeProgress(0);
+      return;
+    }
+    
+    // If production is complete (after 5:36 PM)
+    if (now >= PRODUCTION_END) {
+      setRealTimeTarget(target);
+      setRealTimeProgress(100);
+      return;
+    }
+    
+    // Calculate real-time target based on time elapsed since 8:00 AM
+    const elapsedMilliseconds = now - PRODUCTION_START;
+    const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
+    
+    if (totalProductionMilliseconds > 0) {
+      const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
+      const cumulative = target * progressRatio;
+      setRealTimeTarget(Math.min(Math.round(cumulative * 100) / 100, target));
       setRealTimeProgress(target > 0 ? (cumulative / target) * 100 : 0);
-    };
+    }
+  };
 
-    calculateRealtime();
-    const interval = setInterval(calculateRealtime, 60000);
-    return () => clearInterval(interval);
-  }, [runData, slots, slotTargetsMap, target, header.date]);
+  calculateRealtime();
+  const interval = setInterval(calculateRealtime, 60000); // Update every minute
+  return () => clearInterval(interval);
+}, [runData, slots, slotTargetsMap, target, header.date]);
 
   // ========== Compute efficiency, achievement, real‑time efficiency using finished garments ==========
   useEffect(() => {

@@ -235,54 +235,122 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!runData || !selectedDate || !operatorDetails.length) return;
 
-    const calculateTargets = () => {
-      const now = new Date();
-      const todayStr = selectedDate; // YYYY-MM-DD
+      const calculateTargets = () => {
+  const now = new Date();
+  const todayStr = selectedDate;
+  
+  // Production timeline: 8:00 AM start
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  
+  // Get the last slot end time (should be 17:36:00)
+  const slots = (runData.slots || [])
+    .map(slot => {
+      const end = new Date(`${todayStr}T${slot.slot_end}`);
+      return { ...slot, end };
+    })
+    .filter(s => s.end);
+  
+  // Find the latest end time from slots (should be 17:36:00)
+  const PRODUCTION_END = slots.length > 0 
+    ? new Date(Math.max(...slots.map(s => s.end.getTime())))
+    : new Date(`${todayStr}T17:36:00`);
 
-      // Build slots with start/end as Date objects
-      const slots = (runData.slots || [])
-        .map(slot => {
-          const start = new Date(`${todayStr}T${slot.slot_start}`);
-          const end = new Date(`${todayStr}T${slot.slot_end}`);
-          return { ...slot, start, end };
-        })
-        .filter(s => s.start && s.end);
+  // Build slots with start/end as Date objects and get their targets
+  const slotsWithTargets = (runData.slots || [])
+    .map(slot => {
+      const start = new Date(`${todayStr}T${slot.slot_start}`);
+      const end = new Date(`${todayStr}T${slot.slot_end}`);
+      
+      // Find the target for this slot
+      const slotTarget = (runData.slotTargets || []).find(
+        st => st.slot_label === slot.slot_label
+      )?.slot_target || 0;
+      
+      return { 
+        ...slot, 
+        start, 
+        end,
+        target: Number(slotTarget)
+      };
+    })
+    .filter(s => s.start && s.end);
 
-      // ---- Global cumulative ----
-      let globalCumulative = 0;
-      for (const slot of slots) {
-        const slotTarget = (runData.slotTargets || []).find(
-          st => st.slot_label === slot.slot_label
-        )?.slot_target || 0;
-        if (now >= slot.end) {
-          globalCumulative += Number(slotTarget);
-        } else if (now >= slot.start && now < slot.end) {
-          const elapsed = (now - slot.start) / (slot.end - slot.start);
-          globalCumulative += Number(slotTarget) * elapsed;
-          break;
-        } else {
-          break;
-        }
-      }
-      setRealTimeTarget(Math.round(globalCumulative * 100) / 100);
-      const total = summary?.totalTarget || 0;
-      setRealTimeProgress(total > 0 ? (globalCumulative / total) * 100 : 0);
+  const totalTarget = summary?.totalTarget || 0;
 
-      // ---- Per‑operation cumulative: use the same global value for all operations ----
-      const perOpTargets = {};
-      (runData.operations || []).forEach(opGroup => {
-        const operator = opGroup.operator;
-        (opGroup.operations || []).forEach(operation => {
-          const key = `${operator.operator_no}-${operation.operation_name}`;
-          perOpTargets[key] = Math.round(globalCumulative * 100) / 100;
-        });
+  // If production hasn't started yet (before 8:00 AM)
+  if (now < PRODUCTION_START) {
+    setRealTimeTarget(0);
+    setRealTimeProgress(0);
+    
+    // Set all operation targets to 0
+    const perOpTargets = {};
+    (runData.operations || []).forEach(opGroup => {
+      const operator = opGroup.operator;
+      (opGroup.operations || []).forEach(operation => {
+        const key = `${operator.operator_no}-${operation.operation_name}`;
+        perOpTargets[key] = 0;
       });
-      setOperationRealTimeTargets(perOpTargets);
+    });
+    setOperationRealTimeTargets(perOpTargets);
+    
+    // Generate alerts
+    const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+    setAlerts(newAlerts);
+    return;
+  }
 
-      // ---- Generate alerts based on real‑time targets ----
-      const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
-      setAlerts(newAlerts);
-    };
+  // If production is complete (after 5:36 PM)
+  if (now >= PRODUCTION_END) {
+    setRealTimeTarget(totalTarget);
+    setRealTimeProgress(100);
+    
+    // Set all operation targets to total target
+    const perOpTargets = {};
+    (runData.operations || []).forEach(opGroup => {
+      const operator = opGroup.operator;
+      (opGroup.operations || []).forEach(operation => {
+        const key = `${operator.operator_no}-${operation.operation_name}`;
+        perOpTargets[key] = totalTarget;
+      });
+    });
+    setOperationRealTimeTargets(perOpTargets);
+    
+    // Generate alerts
+    const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+    setAlerts(newAlerts);
+    return;
+  }
+
+  // Calculate real-time target based on time elapsed since 8:00 AM
+  const elapsedMilliseconds = now - PRODUCTION_START;
+  const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
+  
+  let globalCumulative = 0;
+  
+  if (totalProductionMilliseconds > 0) {
+    const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
+    globalCumulative = totalTarget * progressRatio;
+    globalCumulative = Math.min(Math.round(globalCumulative * 100) / 100, totalTarget);
+  }
+  
+  setRealTimeTarget(globalCumulative);
+  setRealTimeProgress(totalTarget > 0 ? (globalCumulative / totalTarget) * 100 : 0);
+
+  // ---- Per‑operation cumulative: use the same global value for all operations ----
+  const perOpTargets = {};
+  (runData.operations || []).forEach(opGroup => {
+    const operator = opGroup.operator;
+    (opGroup.operations || []).forEach(operation => {
+      const key = `${operator.operator_no}-${operation.operation_name}`;
+      perOpTargets[key] = globalCumulative;
+    });
+  });
+  setOperationRealTimeTargets(perOpTargets);
+
+  // ---- Generate alerts based on real‑time targets ----
+  const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+  setAlerts(newAlerts);
+};
 
     calculateTargets();
 
