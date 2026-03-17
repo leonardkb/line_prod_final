@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import MetaSummary from "./MetaSummary";
 import ViewEditOperationPlanner from "./ViewEditOperationPlanner";
 import AddOperatorModal from "./AddOperatorModal";
+import EditWorkingHoursModal from "./EditWorkingHoursModal";
 import DeleteOperatorModal from "./DeleteOperatorModal";
 
 // Helper to ensure dates are compared as YYYY-MM-DD strings
@@ -23,6 +24,8 @@ export default function SavedRunsViewer({ onBack }) {
   const [selectedRun, setSelectedRun] = useState(null);
   const [runData, setRunData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showEditWorkingHours, setShowEditWorkingHours] = useState(false);
+  const [isUpdatingWorkingHours, setIsUpdatingWorkingHours] = useState(false);
   const [message, setMessage] = useState("");
   const [activePanel, setActivePanel] = useState("select"); // select, summary, operations
   
@@ -120,6 +123,41 @@ export default function SavedRunsViewer({ onBack }) {
     // Refresh the run data to get updated operations
     if (selectedRun) {
       handleSelectRun(selectedRun);
+    }
+  };
+
+  const handleUpdateWorkingHours = async (newWorkingHours) => {
+    if (!selectedRun) return;
+
+    setIsUpdatingWorkingHours(true);
+    setMessage("");
+
+    try {
+      const token = localStorage.getItem("token");
+      const response = await fetch(`http://localhost:5000/api/update-working-hours/${selectedRun}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ workingHours: newWorkingHours }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setMessage(`✅ Horas de trabajo actualizadas. Nueva meta: ${data.newTarget.toFixed(2)} piezas`);
+        setShowEditWorkingHours(false);
+        
+        // Refresh the run data to show updated values
+        await handleSelectRun(selectedRun);
+      } else {
+        setMessage(`❌ Error: ${data.error}`);
+      }
+    } catch (err) {
+      setMessage(`❌ Error al actualizar: ${err.message}`);
+    } finally {
+      setIsUpdatingWorkingHours(false);
     }
   };
 
@@ -407,7 +445,16 @@ export default function SavedRunsViewer({ onBack }) {
                 </div>
                 <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-600">
                   <span>Operadores: {runData.run.operators_count}</span>
-                  <span>Horas trabajadas: {runData.run.working_hours}</span>
+                  <span className="flex items-center gap-1">
+                    Horas trabajadas: {runData.run.working_hours}
+                    <button
+                      onClick={() => setShowEditWorkingHours(true)}
+                      className="ml-1 text-blue-600 hover:text-blue-800"
+                      title="Editar horas de trabajo"
+                    >
+                      ✎
+                    </button>
+                  </span>
                   <span>SAM: {runData.run.sam_minutes} min</span>
                   <span>Eficiencia: {Math.round(runData.run.efficiency * 100)}%</span>
                 </div>
@@ -562,13 +609,13 @@ export default function SavedRunsViewer({ onBack }) {
 
       {/* Add Operator Modal */}
       {showAddOperator && selectedRun && (
-  <AddOperatorModal
-    runId={selectedRun}
-    slots={getSlotsFromData()}  // Add this line
-    onClose={() => setShowAddOperator(false)}
-    onOperatorAdded={handleOperatorAdded}
-  />
-)}
+        <AddOperatorModal
+          runId={selectedRun}
+          slots={getSlotsFromData()}
+          onClose={() => setShowAddOperator(false)}
+          onOperatorAdded={handleOperatorAdded}
+        />
+      )}
 
       {/* Delete Operator Modal */}
       {operatorToDelete && (
@@ -578,6 +625,15 @@ export default function SavedRunsViewer({ onBack }) {
           onOperatorDeleted={handleOperatorDeleted}
         />
       )}
+
+      {/* Edit Working Hours Modal */}
+      <EditWorkingHoursModal
+        isOpen={showEditWorkingHours}
+        onClose={() => setShowEditWorkingHours(false)}
+        currentWorkingHours={runData?.run?.working_hours}
+        onSave={handleUpdateWorkingHours}
+        isSaving={isUpdatingWorkingHours}
+      />
     </div>
   );
 }

@@ -34,6 +34,11 @@ export default function AdminDashboard() {
 
   const [initialLoadAttempted, setInitialLoadAttempted] = useState(false);
 
+  // New state for multiple styles
+  const [availableRuns, setAvailableRuns] = useState([]);
+  const [selectedRunId, setSelectedRunId] = useState(null);
+  const [showStyleSelector, setShowStyleSelector] = useState(false);
+
   // Real‑time target states
   const [realTimeTarget, setRealTimeTarget] = useState(0);
   const [realTimeProgress, setRealTimeProgress] = useState(0);
@@ -45,7 +50,7 @@ export default function AdminDashboard() {
     return arr;
   };
 
-  // ========== NEW: Alert generation using real‑time targets ==========
+  // Alert generation using real‑time targets
   const generateRealTimeAlerts = (operatorDetails, realTimeMap) => {
     if (!operatorDetails || operatorDetails.length === 0) return [];
 
@@ -53,11 +58,11 @@ export default function AdminDashboard() {
 
     operatorDetails.forEach((operator) => {
       const opKey = `${operator.operatorNo}-${operator.operationName}`;
-      const realTimeTarget = realTimeMap[opKey] ?? operator.plannedQty; // fallback to full plan if missing
+      const realTimeTarget = realTimeMap[opKey] ?? operator.plannedQty;
       const variance = operator.totalSewed - realTimeTarget;
       const efficiency = parseFloat(operator.efficiency);
 
-      // Alerta 1: Variación negativa significativa (más del 10% debajo del objetivo en tiempo real)
+      // Alerta 1: Variación negativa significativa
       if (variance < 0 && Math.abs(variance) > realTimeTarget * 0.1) {
         const severity =
           Math.abs(variance) > realTimeTarget * 0.3 ? "HIGH" : "MEDIUM";
@@ -126,7 +131,7 @@ export default function AdminDashboard() {
         });
       }
 
-      // Alerta 4: Producción cero pero existe cantidad planificada en tiempo real
+      // Alerta 4: Producción cero pero existe cantidad planificada
       if (operator.totalSewed === 0 && realTimeTarget > 0) {
         alertList.push({
           id: `no-production-${operator.operatorNo}-${Date.now()}`,
@@ -144,7 +149,7 @@ export default function AdminDashboard() {
         });
       }
 
-      // Alerta 5: Variación negativa muy alta (> 50% debajo del objetivo en tiempo real)
+      // Alerta 5: Variación negativa muy alta
       if (variance < 0 && Math.abs(variance) > realTimeTarget * 0.5) {
         alertList.push({
           id: `critical-variance-${operator.operatorNo}-${Date.now()}`,
@@ -201,12 +206,17 @@ export default function AdminDashboard() {
 
     const lineParam = searchParams.get("line");
     const dateParam = searchParams.get("date");
+    const runIdParam = searchParams.get("runId");
 
     const today = new Date().toISOString().slice(0, 10);
     setSelectedDate(dateParam || today);
 
     if (lineParam) {
       setSelectedLine(lineParam);
+    }
+
+    if (runIdParam) {
+      setSelectedRunId(parseInt(runIdParam));
     }
 
     setLoading(false);
@@ -219,7 +229,6 @@ export default function AdminDashboard() {
         fetchProductionData(false);
       }, 100);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLine, selectedDate, loading]);
 
   useEffect(() => {
@@ -227,175 +236,131 @@ export default function AdminDashboard() {
       const url = new URL(window.location);
       url.searchParams.set("line", selectedLine);
       url.searchParams.set("date", selectedDate);
+      if (selectedRunId) {
+        url.searchParams.set("runId", selectedRunId);
+      }
       window.history.replaceState({}, "", url);
     }
-  }, [selectedLine, selectedDate, initialLoadAttempted]);
+  }, [selectedLine, selectedDate, selectedRunId, initialLoadAttempted]);
 
-  // ========== Real‑time target calculation (global + per operation) ==========
+  // Real‑time target calculation
   useEffect(() => {
     if (!runData || !selectedDate || !operatorDetails.length) return;
 
-      const calculateTargets = () => {
-  const now = new Date();
-  const todayStr = selectedDate;
-  
-  // Production timeline: 8:00 AM start
-  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
-  
-  // Get the last slot end time (should be 17:36:00)
-  const slots = (runData.slots || [])
-    .map(slot => {
-      const end = new Date(`${todayStr}T${slot.slot_end}`);
-      return { ...slot, end };
-    })
-    .filter(s => s.end);
-  
-  // Find the latest end time from slots (should be 17:36:00)
-  const PRODUCTION_END = slots.length > 0 
-    ? new Date(Math.max(...slots.map(s => s.end.getTime())))
-    : new Date(`${todayStr}T17:36:00`);
-
-  // Build slots with start/end as Date objects and get their targets
-  const slotsWithTargets = (runData.slots || [])
-    .map(slot => {
-      const start = new Date(`${todayStr}T${slot.slot_start}`);
-      const end = new Date(`${todayStr}T${slot.slot_end}`);
+    const calculateTargets = () => {
+      const now = new Date();
+      const todayStr = selectedDate;
       
-      // Find the target for this slot
-      const slotTarget = (runData.slotTargets || []).find(
-        st => st.slot_label === slot.slot_label
-      )?.slot_target || 0;
+      const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
       
-      return { 
-        ...slot, 
-        start, 
-        end,
-        target: Number(slotTarget)
-      };
-    })
-    .filter(s => s.start && s.end);
+      const slots = (runData.slots || [])
+        .map(slot => {
+          const end = new Date(`${todayStr}T${slot.slot_end}`);
+          return { ...slot, end };
+        })
+        .filter(s => s.end);
+      
+      const PRODUCTION_END = slots.length > 0 
+        ? new Date(Math.max(...slots.map(s => s.end.getTime())))
+        : new Date(`${todayStr}T17:36:00`);
 
-  const totalTarget = summary?.totalTarget || 0;
+      const slotsWithTargets = (runData.slots || [])
+        .map(slot => {
+          const start = new Date(`${todayStr}T${slot.slot_start}`);
+          const end = new Date(`${todayStr}T${slot.slot_end}`);
+          
+          const slotTarget = (runData.slotTargets || []).find(
+            st => st.slot_label === slot.slot_label
+          )?.slot_target || 0;
+          
+          return { 
+            ...slot, 
+            start, 
+            end,
+            target: Number(slotTarget)
+          };
+        })
+        .filter(s => s.start && s.end);
 
-  // If production hasn't started yet (before 8:00 AM)
-  if (now < PRODUCTION_START) {
-    setRealTimeTarget(0);
-    setRealTimeProgress(0);
-    
-    // Set all operation targets to 0
-    const perOpTargets = {};
-    (runData.operations || []).forEach(opGroup => {
-      const operator = opGroup.operator;
-      (opGroup.operations || []).forEach(operation => {
-        const key = `${operator.operator_no}-${operation.operation_name}`;
-        perOpTargets[key] = 0;
+      const totalTarget = summary?.totalTarget || 0;
+
+      if (now < PRODUCTION_START) {
+        setRealTimeTarget(0);
+        setRealTimeProgress(0);
+        
+        const perOpTargets = {};
+        (runData.operations || []).forEach(opGroup => {
+          const operator = opGroup.operator;
+          (opGroup.operations || []).forEach(operation => {
+            const key = `${operator.operator_no}-${operation.operation_name}`;
+            perOpTargets[key] = 0;
+          });
+        });
+        setOperationRealTimeTargets(perOpTargets);
+        
+        const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+        setAlerts(newAlerts);
+        return;
+      }
+
+      if (now >= PRODUCTION_END) {
+        setRealTimeTarget(totalTarget);
+        setRealTimeProgress(100);
+        
+        const perOpTargets = {};
+        (runData.operations || []).forEach(opGroup => {
+          const operator = opGroup.operator;
+          (opGroup.operations || []).forEach(operation => {
+            const key = `${operator.operator_no}-${operation.operation_name}`;
+            perOpTargets[key] = totalTarget;
+          });
+        });
+        setOperationRealTimeTargets(perOpTargets);
+        
+        const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+        setAlerts(newAlerts);
+        return;
+      }
+
+      const elapsedMilliseconds = now - PRODUCTION_START;
+      const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
+      
+      let globalCumulative = 0;
+      
+      if (totalProductionMilliseconds > 0) {
+        const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
+        globalCumulative = totalTarget * progressRatio;
+        globalCumulative = Math.min(Math.round(globalCumulative * 100) / 100, totalTarget);
+      }
+      
+      setRealTimeTarget(globalCumulative);
+      setRealTimeProgress(totalTarget > 0 ? (globalCumulative / totalTarget) * 100 : 0);
+
+      const perOpTargets = {};
+      (runData.operations || []).forEach(opGroup => {
+        const operator = opGroup.operator;
+        (opGroup.operations || []).forEach(operation => {
+          const key = `${operator.operator_no}-${operation.operation_name}`;
+          perOpTargets[key] = globalCumulative;
+        });
       });
-    });
-    setOperationRealTimeTargets(perOpTargets);
-    
-    // Generate alerts
-    const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
-    setAlerts(newAlerts);
-    return;
-  }
+      setOperationRealTimeTargets(perOpTargets);
 
-  // If production is complete (after 5:36 PM)
-  if (now >= PRODUCTION_END) {
-    setRealTimeTarget(totalTarget);
-    setRealTimeProgress(100);
-    
-    // Set all operation targets to total target
-    const perOpTargets = {};
-    (runData.operations || []).forEach(opGroup => {
-      const operator = opGroup.operator;
-      (opGroup.operations || []).forEach(operation => {
-        const key = `${operator.operator_no}-${operation.operation_name}`;
-        perOpTargets[key] = totalTarget;
-      });
-    });
-    setOperationRealTimeTargets(perOpTargets);
-    
-    // Generate alerts
-    const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
-    setAlerts(newAlerts);
-    return;
-  }
-
-  // Calculate real-time target based on time elapsed since 8:00 AM
-  const elapsedMilliseconds = now - PRODUCTION_START;
-  const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
-  
-  let globalCumulative = 0;
-  
-  if (totalProductionMilliseconds > 0) {
-    const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
-    globalCumulative = totalTarget * progressRatio;
-    globalCumulative = Math.min(Math.round(globalCumulative * 100) / 100, totalTarget);
-  }
-  
-  setRealTimeTarget(globalCumulative);
-  setRealTimeProgress(totalTarget > 0 ? (globalCumulative / totalTarget) * 100 : 0);
-
-  // ---- Per‑operation cumulative: use the same global value for all operations ----
-  const perOpTargets = {};
-  (runData.operations || []).forEach(opGroup => {
-    const operator = opGroup.operator;
-    (opGroup.operations || []).forEach(operation => {
-      const key = `${operator.operator_no}-${operation.operation_name}`;
-      perOpTargets[key] = globalCumulative;
-    });
-  });
-  setOperationRealTimeTargets(perOpTargets);
-
-  // ---- Generate alerts based on real‑time targets ----
-  const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
-  setAlerts(newAlerts);
-};
+      const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+      setAlerts(newAlerts);
+    };
 
     calculateTargets();
 
-    // Refresh every minute
     const interval = setInterval(calculateTargets, 60000);
     return () => clearInterval(interval);
   }, [runData, selectedDate, operatorDetails, summary?.totalTarget]);
 
-  const fetchProductionData = async (isManual = true) => {
-    if (!selectedLine || !selectedDate) {
-      if (isManual) alert("Por favor seleccione línea y fecha");
-      return;
-    }
-
-    setLoadingData(true);
-    setAlerts([]);
-
+  // Helper function to load a specific run
+  const loadSpecificRun = async (runId, token) => {
     try {
-      const token = localStorage.getItem("token");
-
-      const runsResponse = await axios.get(
-        `${API_BASE}/api/line-runs/${selectedLine}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      if (!runsResponse.data?.success || !Array.isArray(runsResponse.data?.runs)) {
-        throw new Error("No se devolvieron corridas desde el servidor");
-      }
-
-      const selectedRun = runsResponse.data.runs.find((run) => {
-        return toYMD(run.run_date) === selectedDate;
-      });
-
-      if (!selectedRun) {
-        setRunData(null);
-        setSummary(null);
-        setOperatorDetails([]);
-        if (isManual) {
-          alert(`No se encontraron datos de producción para la Línea ${selectedLine} en ${selectedDate}`);
-        }
-        return;
-      }
-
       const runDetailResponse = await axios.get(
-        `${API_BASE}/api/get-run-data/${selectedRun.id}`,
+        `${API_BASE}/api/get-run-data/${runId}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -405,6 +370,7 @@ export default function AdminDashboard() {
 
       const data = runDetailResponse.data;
       setRunData(data);
+      setSelectedRunId(runId);
 
       const operatorsCount = data.operators?.length || 0;
       const targetPcs = Number(data.run?.target_pcs || 0);
@@ -436,7 +402,7 @@ export default function AdminDashboard() {
             operationName: operation.operation_name,
             style: data.run.style,
             totalSewed: operationSewed,
-            plannedQty: operationPlanned,          // full‑day planned total (for fallback)
+            plannedQty: operationPlanned,
             capacityPerHour,
             efficiency: capacityPerHour > 0 ? (operationSewed / capacityPerHour).toFixed(2) : "0",
           });
@@ -445,7 +411,6 @@ export default function AdminDashboard() {
 
       setOperatorDetails(operatorData);
 
-      // Calculate finished garments = sum of packing operations
       const packingKeywords = ['pack', 'emp'];
       const packingTotal = operatorData
         .filter(op => packingKeywords.some(keyword => 
@@ -453,7 +418,6 @@ export default function AdminDashboard() {
         ))
         .reduce((sum, op) => sum + op.totalSewed, 0);
 
-      // Alerts are now generated inside the real‑time effect, so we don't call old generator here.
       setSummary({
         line: data.run.line_no,
         date: toYMD(data.run.run_date),
@@ -466,6 +430,75 @@ export default function AdminDashboard() {
         efficiency: Number(data.run.efficiency || 0) * 100,
         achievement: targetPcs > 0 ? ((packingTotal / targetPcs) * 100).toFixed(2) + "%" : "0%",
       });
+      
+      setShowStyleSelector(false);
+    } catch (error) {
+      console.error("Error loading specific run:", error);
+      throw error;
+    }
+  };
+
+  const fetchProductionData = async (isManual = true) => {
+    if (!selectedLine || !selectedDate) {
+      if (isManual) alert("Por favor seleccione línea y fecha");
+      return;
+    }
+
+    setLoadingData(true);
+    setAlerts([]);
+    setAvailableRuns([]);
+    setShowStyleSelector(false);
+
+    try {
+      const token = localStorage.getItem("token");
+
+      const runsResponse = await axios.get(
+        `${API_BASE}/api/line-runs/${selectedLine}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (!runsResponse.data?.success || !Array.isArray(runsResponse.data?.runs)) {
+        throw new Error("No se devolvieron corridas desde el servidor");
+      }
+
+      const runsForDate = runsResponse.data.runs.filter((run) => {
+        return toYMD(run.run_date) === selectedDate;
+      });
+
+      if (runsForDate.length === 0) {
+        setRunData(null);
+        setSummary(null);
+        setOperatorDetails([]);
+        if (isManual) {
+          alert(`No se encontraron datos de producción para la Línea ${selectedLine} en ${selectedDate}`);
+        }
+        return;
+      }
+
+      // Check if there are multiple styles
+      if (runsForDate.length > 1) {
+        setAvailableRuns(runsForDate);
+        
+        const runIdParam = searchParams.get("runId");
+        if (runIdParam) {
+          const matchingRun = runsForDate.find(r => r.id === parseInt(runIdParam));
+          if (matchingRun) {
+            await loadSpecificRun(matchingRun.id, token);
+            setLoadingData(false);
+            return;
+          }
+        }
+        
+        setShowStyleSelector(true);
+        setRunData(null);
+        setSummary(null);
+        setOperatorDetails([]);
+        setLoadingData(false);
+        return;
+      }
+
+      await loadSpecificRun(runsForDate[0].id, token);
+      
     } catch (error) {
       console.error("Error fetching production data:", error);
       if (isManual) {
@@ -595,10 +628,59 @@ export default function AdminDashboard() {
           {selectedLine && selectedDate && initialLoadAttempted && !loadingData && runData && (
             <div className="mt-4 text-xs text-gray-500 flex items-center">
               <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-              Datos de la Línea {selectedLine} cargados automáticamente para {formatDate(selectedDate)}
+              Datos de la Línea {selectedLine} - Estilo {runData.run?.style} cargados para {formatDate(selectedDate)}
             </div>
           )}
         </div>
+
+        {/* Style selector for multiple runs */}
+        {showStyleSelector && availableRuns.length > 0 && (
+          <div className="mt-6 mb-6 bg-blue-50 border border-blue-200 rounded-xl p-6">
+            <h3 className="text-lg font-medium text-blue-800 mb-3">
+              Múltiples estilos encontrados para Línea {selectedLine}
+            </h3>
+            <p className="text-blue-600 mb-4">
+              Se encontraron {availableRuns.length} estilos diferentes para esta fecha. Por favor seleccione uno:
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {availableRuns.map((run) => (
+                <button
+                  key={run.id}
+                  onClick={async () => {
+                    setLoadingData(true);
+                    try {
+                      const token = localStorage.getItem("token");
+                      await loadSpecificRun(run.id, token);
+                      // Update URL with runId
+                      const url = new URL(window.location);
+                      url.searchParams.set("runId", run.id);
+                      window.history.replaceState({}, "", url);
+                    } catch (error) {
+                      alert("Error al cargar el estilo seleccionado");
+                    } finally {
+                      setLoadingData(false);
+                    }
+                  }}
+                  className="bg-white border-2 border-blue-200 hover:border-blue-400 rounded-lg p-4 text-left transition-all hover:shadow-md"
+                >
+                  <div className="font-semibold text-gray-900 mb-1">{run.style}</div>
+                  <div className="text-sm text-gray-600">
+                    Objetivo: {run.target_pcs} piezas
+                  </div>
+                  <div className="text-xs text-gray-500 mt-2">
+                    Operadores: {run.operators_count}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowStyleSelector(false)}
+              className="mt-4 text-sm text-gray-600 hover:text-gray-900"
+            >
+              Cancelar
+            </button>
+          </div>
+        )}
 
         {/* Alerts Section */}
         {selectedLine && selectedDate && alerts.length > 0 && (
@@ -768,15 +850,14 @@ export default function AdminDashboard() {
                 </h3>
                 <p className="text-green-600 mt-1">
                   No se detectaron alertas de producción para la Línea {selectedLine} en{" "}
-                  {formatDate(selectedDate)}. Todos los operadores están trabajando dentro de rangos
-                  aceptables según el objetivo en tiempo real.
+                  {formatDate(selectedDate)}. Estilo: {summary?.style}
                 </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* ========== SUMMARY CARDS (5) ========== */}
+        {/* Summary Cards */}
         {summary && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-6">
             <div className="bg-white rounded-xl shadow-sm p-5">
@@ -806,6 +887,14 @@ export default function AdminDashboard() {
               <div className="text-2xl font-bold text-gray-900">{summary.achievement}</div>
               <div className="text-sm text-gray-500 mt-1">
                 Línea {summary.line} - {summary.style}
+                {availableRuns.length > 1 && (
+                  <button
+                    onClick={() => setShowStyleSelector(true)}
+                    className="ml-2 text-xs text-blue-600 hover:text-blue-800 underline"
+                  >
+                    Cambiar estilo
+                  </button>
+                )}
               </div>
             </div>
 
@@ -876,12 +965,8 @@ export default function AdminDashboard() {
 
                 <tbody className="bg-white divide-y divide-gray-200">
                   {operatorDetails.map((operator, index) => {
-                    // Unique key for this operation
                     const opKey = `${operator.operatorNo}-${operator.operationName}`;
-                    // Real‑time planned quantity = line's cumulative target
                     const realTimePlanned = operationRealTimeTargets[opKey] ?? operator.plannedQty;
-
-                    // Variance based on real‑time target
                     const varianceReal = operator.totalSewed - realTimePlanned;
                     const varianceClassReal = varianceReal >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50";
 
@@ -914,7 +999,6 @@ export default function AdminDashboard() {
                           </span>
                         </td>
 
-                        {/* Meta de línea (tiempo real) */}
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {realTimePlanned.toLocaleString(undefined, {
                             minimumFractionDigits: 2,
@@ -946,7 +1030,6 @@ export default function AdminDashboard() {
                           </span>
                         </td>
 
-                        {/* Variación corregida */}
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`px-2 py-1 text-xs font-medium rounded-full ${varianceClassReal}`}>
                             {varianceReal >= 0 ? "+" : ""}
@@ -978,12 +1061,6 @@ export default function AdminDashboard() {
                     );
                   })}
                 </tbody>
-
-                {summary && (
-                  <tfoot className="bg-gray-50">
-                    <tr>{/* optional footer – left as originally */}</tr>
-                  </tfoot>
-                )}
               </table>
             </div>
           </div>
@@ -995,7 +1072,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {selectedLine && selectedDate && !loadingData && !runData && (
+        {selectedLine && selectedDate && !loadingData && !runData && !showStyleSelector && (
           <div className="bg-white rounded-xl shadow-sm p-8 text-center">
             <h3 className="text-lg font-medium text-gray-900 mb-2">
               No se Encontraron Datos de Producción
