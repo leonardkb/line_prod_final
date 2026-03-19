@@ -13,6 +13,138 @@ function toYMD(d) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Helper function to calculate finished garments (from packing operations)
+const calculateFinishedGarments = (runData) => {
+  if (!runData) return 0;
+  let total = 0;
+  const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
+  
+  for (const block of runData.operations || []) {
+    for (const op of block.operations || []) {
+      const opName = (op.operation_name || '').toLowerCase();
+      if (packingKeywords.some(keyword => opName.includes(keyword))) {
+        const sewedData = op.sewed_data || {};
+        for (const qty of Object.values(sewedData)) {
+          total += Number(qty) || 0;
+        }
+      }
+    }
+  }
+  return total;
+};
+
+// Helper function to calculate real-time efficiency
+const calculateRealtimeEfficiency = (runData, selectedDate) => {
+  if (!runData || !selectedDate) return 0;
+  
+  const now = new Date();
+  const todayStr = selectedDate;
+  
+  // Production timeline: 8:00 AM start
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  
+  // Get the last slot end time
+  const slots = (runData.slots || [])
+    .map(slot => {
+      const end = new Date(`${todayStr}T${slot.slot_end}`);
+      return { ...slot, end };
+    })
+    .filter(s => s.end);
+  
+  // Find the latest end time from slots
+  const PRODUCTION_END = slots.length > 0 
+    ? new Date(Math.max(...slots.map(s => s.end.getTime())))
+    : new Date(`${todayStr}T17:36:00`);
+  
+  // If production hasn't started yet
+  if (now < PRODUCTION_START) {
+    return 0;
+  }
+  
+  // If production has ended for the day
+  if (now >= PRODUCTION_END) {
+    // Calculate full day efficiency using total production
+    const sewed = calculateFinishedGarments(runData);
+    const totalSAMOutput = sewed * (runData.run?.sam_minutes || 0);
+    const totalAvailableMinutes = (runData.operators?.length || 0) * 
+                                  (runData.run?.working_hours || 0) * 60;
+    
+    return totalAvailableMinutes > 0 
+      ? (totalSAMOutput / totalAvailableMinutes) * 100 
+      : 0;
+  }
+  
+  // Calculate elapsed time in minutes
+  const elapsedMilliseconds = now - PRODUCTION_START;
+  const elapsedMinutes = elapsedMilliseconds / (1000 * 60);
+  
+  // Get actual working hours so far (in minutes)
+  const actualWorkingMinutes = Math.min(
+    elapsedMinutes,
+    (PRODUCTION_END - PRODUCTION_START) / (1000 * 60)
+  );
+  
+  // Calculate SAM produced so far (only from packing operations)
+  const sewedSoFar = calculateFinishedGarments(runData);
+  const samProducedSoFar = sewedSoFar * (runData.run?.sam_minutes || 0);
+  
+  // Calculate available minutes so far (operators * actual time elapsed)
+  const operatorsCount = runData.operators?.length || 0;
+  const availableMinutesSoFar = operatorsCount * actualWorkingMinutes;
+  
+  // Calculate real-time efficiency
+  const realtimeEfficiency = availableMinutesSoFar > 0 
+    ? (samProducedSoFar / availableMinutesSoFar) * 100 
+    : 0;
+  
+  return Math.round(realtimeEfficiency * 100) / 100;
+};
+
+// Helper function to calculate operation real-time efficiency
+const calculateOperationRealtimeEfficiency = (operation, operator, runData, selectedDate) => {
+  const now = new Date();
+  const todayStr = selectedDate;
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  
+  // Calculate elapsed time in minutes
+  const elapsedMinutes = now > PRODUCTION_START 
+    ? Math.min((now - PRODUCTION_START) / (1000 * 60), 8 * 60) // Max 8 hours
+    : 0;
+  
+  // Get total sewed for this operation
+  let totalSewed = 0;
+  const sewedData = operation.sewed_data || {};
+  Object.values(sewedData).forEach(qty => {
+    totalSewed += Number(qty) || 0;
+  });
+  
+  // Calculate average cycle time from t1..t5 if available
+  let cycleTimeSec = 0;
+  let count = 0;
+  ['t1_sec', 't2_sec', 't3_sec', 't4_sec', 't5_sec'].forEach(key => {
+    if (operation[key]) {
+      cycleTimeSec += Number(operation[key]);
+      count++;
+    }
+  });
+  
+  // Operation-specific SAM (in minutes)
+  const operationSAM = count > 0 
+    ? (cycleTimeSec / count) / 60  // Average cycle time in minutes
+    : runData.run?.sam_minutes || 0;
+  
+  // SAM produced by this operation
+  const samProduced = totalSewed * operationSAM;
+  
+  // Available minutes (this operator working all elapsed time)
+  const availableMinutes = elapsedMinutes;
+  
+  // Real-time efficiency for this operation
+  const efficiency = availableMinutes > 0 ? (samProduced / availableMinutes) * 100 : 0;
+  
+  return Math.round(efficiency * 100) / 100;
+};
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -42,7 +174,9 @@ export default function AdminDashboard() {
   // Real‑time target states
   const [realTimeTarget, setRealTimeTarget] = useState(0);
   const [realTimeProgress, setRealTimeProgress] = useState(0);
+  const [realTimeEfficiency, setRealTimeEfficiency] = useState(0);
   const [operationRealTimeTargets, setOperationRealTimeTargets] = useState({});
+  const [operationRealTimeEfficiencies, setOperationRealTimeEfficiencies] = useState({});
 
   const generateLineOptions = () => {
     const arr = [];
@@ -50,8 +184,8 @@ export default function AdminDashboard() {
     return arr;
   };
 
-  // Alert generation using real‑time targets
-  const generateRealTimeAlerts = (operatorDetails, realTimeMap) => {
+  // Alert generation using real‑time targets and efficiencies
+  const generateRealTimeAlerts = (operatorDetails, realTimeMap, efficiencyMap) => {
     if (!operatorDetails || operatorDetails.length === 0) return [];
 
     const alertList = [];
@@ -59,10 +193,30 @@ export default function AdminDashboard() {
     operatorDetails.forEach((operator) => {
       const opKey = `${operator.operatorNo}-${operator.operationName}`;
       const realTimeTarget = realTimeMap[opKey] ?? operator.plannedQty;
+      const realTimeEff = efficiencyMap[opKey] ?? 0;
       const variance = operator.totalSewed - realTimeTarget;
       const efficiency = parseFloat(operator.efficiency);
 
-      // Alerta 1: Variación negativa significativa
+      // Alerta 1: Real-time efficiency muy baja (< 50%)
+      if (realTimeEff < 50 && realTimeEff > 0) {
+        alertList.push({
+          id: `realtime-eff-${operator.operatorNo}-${Date.now()}`,
+          type: "REALTIME_EFFICIENCY",
+          severity: "HIGH",
+          operatorNo: operator.operatorNo,
+          operatorName: operator.operatorName,
+          operationName: operator.operationName,
+          style: operator.style,
+          realtimeEfficiency: realTimeEff,
+          targetEfficiency: 80,
+          date: selectedDate,
+          line: selectedLine,
+          message: `Operador ${operator.operatorNo} (${operator.operatorName}) tiene eficiencia en tiempo real de ${realTimeEff.toFixed(1)}% para ${operator.operationName}`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Alerta 2: Variación negativa significativa
       if (variance < 0 && Math.abs(variance) > realTimeTarget * 0.1) {
         const severity =
           Math.abs(variance) > realTimeTarget * 0.3 ? "HIGH" : "MEDIUM";
@@ -84,12 +238,12 @@ export default function AdminDashboard() {
           line: selectedLine,
           message: `Operador ${operator.operatorNo} (${operator.operatorName}) está ${Math.abs(
             variance
-          )} piezas debajo del objetivo en tiempo real para ${operator.operationName}`,
+          ).toFixed(0)} piezas debajo del objetivo en tiempo real para ${operator.operationName}`,
           timestamp: new Date().toISOString(),
         });
       }
 
-      // Alerta 2: Eficiencia muy baja (< 60%)
+      // Alerta 3: Eficiencia muy baja (< 60%)
       if (efficiency < 0.6 && efficiency > 0) {
         alertList.push({
           id: `efficiency-${operator.operatorNo}-${Date.now()}`,
@@ -110,7 +264,7 @@ export default function AdminDashboard() {
         });
       }
 
-      // Alerta 3: Eficiencia baja (60-80%)
+      // Alerta 4: Eficiencia baja (60-80%)
       if (efficiency >= 0.6 && efficiency < 0.8) {
         alertList.push({
           id: `efficiency-warning-${operator.operatorNo}-${Date.now()}`,
@@ -131,7 +285,7 @@ export default function AdminDashboard() {
         });
       }
 
-      // Alerta 4: Producción cero pero existe cantidad planificada
+      // Alerta 5: Producción cero pero existe cantidad planificada
       if (operator.totalSewed === 0 && realTimeTarget > 0) {
         alertList.push({
           id: `no-production-${operator.operatorNo}-${Date.now()}`,
@@ -149,7 +303,7 @@ export default function AdminDashboard() {
         });
       }
 
-      // Alerta 5: Variación negativa muy alta
+      // Alerta 6: Variación negativa muy alta
       if (variance < 0 && Math.abs(variance) > realTimeTarget * 0.5) {
         alertList.push({
           id: `critical-variance-${operator.operatorNo}-${Date.now()}`,
@@ -243,11 +397,11 @@ export default function AdminDashboard() {
     }
   }, [selectedLine, selectedDate, selectedRunId, initialLoadAttempted]);
 
-  // Real‑time target calculation
+  // Real‑time target and efficiency calculation
   useEffect(() => {
     if (!runData || !selectedDate || !operatorDetails.length) return;
 
-    const calculateTargets = () => {
+    const calculateTargetsAndEfficiency = () => {
       const now = new Date();
       const todayStr = selectedDate;
       
@@ -287,18 +441,23 @@ export default function AdminDashboard() {
       if (now < PRODUCTION_START) {
         setRealTimeTarget(0);
         setRealTimeProgress(0);
+        setRealTimeEfficiency(0);
         
         const perOpTargets = {};
+        const perOpEfficiencies = {};
+        
         (runData.operations || []).forEach(opGroup => {
           const operator = opGroup.operator;
           (opGroup.operations || []).forEach(operation => {
             const key = `${operator.operator_no}-${operation.operation_name}`;
             perOpTargets[key] = 0;
+            perOpEfficiencies[key] = 0;
           });
         });
         setOperationRealTimeTargets(perOpTargets);
+        setOperationRealTimeEfficiencies(perOpEfficiencies);
         
-        const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+        const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets, perOpEfficiencies);
         setAlerts(newAlerts);
         return;
       }
@@ -307,17 +466,28 @@ export default function AdminDashboard() {
         setRealTimeTarget(totalTarget);
         setRealTimeProgress(100);
         
+        // Calculate final efficiency for the day
+        const finalEfficiency = calculateRealtimeEfficiency(runData, selectedDate);
+        setRealTimeEfficiency(finalEfficiency);
+        
         const perOpTargets = {};
+        const perOpEfficiencies = {};
+        
         (runData.operations || []).forEach(opGroup => {
           const operator = opGroup.operator;
           (opGroup.operations || []).forEach(operation => {
             const key = `${operator.operator_no}-${operation.operation_name}`;
             perOpTargets[key] = totalTarget;
+            
+            // Calculate per-operation real-time efficiency
+            const opEfficiency = calculateOperationRealtimeEfficiency(operation, operator, runData, selectedDate);
+            perOpEfficiencies[key] = opEfficiency;
           });
         });
         setOperationRealTimeTargets(perOpTargets);
+        setOperationRealTimeEfficiencies(perOpEfficiencies);
         
-        const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+        const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets, perOpEfficiencies);
         setAlerts(newAlerts);
         return;
       }
@@ -335,24 +505,36 @@ export default function AdminDashboard() {
       
       setRealTimeTarget(globalCumulative);
       setRealTimeProgress(totalTarget > 0 ? (globalCumulative / totalTarget) * 100 : 0);
+      
+      // Calculate real-time efficiency
+      const realtimeEff = calculateRealtimeEfficiency(runData, selectedDate);
+      setRealTimeEfficiency(realtimeEff);
 
       const perOpTargets = {};
+      const perOpEfficiencies = {};
+      
       (runData.operations || []).forEach(opGroup => {
         const operator = opGroup.operator;
         (opGroup.operations || []).forEach(operation => {
           const key = `${operator.operator_no}-${operation.operation_name}`;
           perOpTargets[key] = globalCumulative;
+          
+          // Calculate per-operation real-time efficiency
+          const opEfficiency = calculateOperationRealtimeEfficiency(operation, operator, runData, selectedDate);
+          perOpEfficiencies[key] = opEfficiency;
         });
       });
+      
       setOperationRealTimeTargets(perOpTargets);
+      setOperationRealTimeEfficiencies(perOpEfficiencies);
 
-      const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets);
+      const newAlerts = generateRealTimeAlerts(operatorDetails, perOpTargets, perOpEfficiencies);
       setAlerts(newAlerts);
     };
 
-    calculateTargets();
+    calculateTargetsAndEfficiency();
 
-    const interval = setInterval(calculateTargets, 60000);
+    const interval = setInterval(calculateTargetsAndEfficiency, 60000);
     return () => clearInterval(interval);
   }, [runData, selectedDate, operatorDetails, summary?.totalTarget]);
 
@@ -396,6 +578,17 @@ export default function AdminDashboard() {
 
           const capacityPerHour = Number(operation.capacity_per_hour || 0);
 
+          // Calculate average cycle time
+          let cycleTimeSec = 0;
+          let count = 0;
+          ['t1_sec', 't2_sec', 't3_sec', 't4_sec', 't5_sec'].forEach(key => {
+            if (operation[key]) {
+              cycleTimeSec += Number(operation[key]);
+              count++;
+            }
+          });
+          const avgCycleTimeSec = count > 0 ? cycleTimeSec / count : 0;
+
           operatorData.push({
             operatorNo: operator.operator_no,
             operatorName: operator.operator_name || `Operador ${operator.operator_no}`,
@@ -404,6 +597,7 @@ export default function AdminDashboard() {
             totalSewed: operationSewed,
             plannedQty: operationPlanned,
             capacityPerHour,
+            avgCycleTimeSec,
             efficiency: capacityPerHour > 0 ? (operationSewed / capacityPerHour).toFixed(2) : "0",
           });
         });
@@ -411,12 +605,15 @@ export default function AdminDashboard() {
 
       setOperatorDetails(operatorData);
 
-      const packingKeywords = ['pack', 'emp'];
+      const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
       const packingTotal = operatorData
         .filter(op => packingKeywords.some(keyword => 
           op.operationName.toLowerCase().includes(keyword)
         ))
         .reduce((sum, op) => sum + op.totalSewed, 0);
+
+      // Calculate initial real-time efficiency
+      const initialRealtimeEff = calculateRealtimeEfficiency(data, selectedDate);
 
       setSummary({
         line: data.run.line_no,
@@ -428,6 +625,7 @@ export default function AdminDashboard() {
         workingHours: data.run.working_hours,
         sam: data.run.sam_minutes,
         efficiency: Number(data.run.efficiency || 0) * 100,
+        realtimeEfficiency: initialRealtimeEff,
         achievement: targetPcs > 0 ? ((packingTotal / targetPcs) * 100).toFixed(2) + "%" : "0%",
       });
       
@@ -550,11 +748,19 @@ export default function AdminDashboard() {
         return "🔥";
       case "EFFICIENCY":
         return "📊";
+      case "REALTIME_EFFICIENCY":
+        return "⏱️";
       case "NO_PRODUCTION":
         return "🛑";
       default:
         return "ℹ️";
     }
+  };
+
+  const getEfficiencyColor = (efficiency) => {
+    if (efficiency >= 80) return "text-green-600 bg-green-50";
+    if (efficiency >= 60) return "text-yellow-600 bg-yellow-50";
+    return "text-red-600 bg-red-50";
   };
 
   if (loading) {
@@ -741,9 +947,14 @@ export default function AdminDashboard() {
                                       Estilo: {alert.style}
                                     </span>
                                   )}
+                                  {alert.realtimeEfficiency !== undefined && (
+                                    <span className={`text-xs px-2 py-1 rounded ${getEfficiencyColor(alert.realtimeEfficiency)}`}>
+                                      Eficiencia RT: {alert.realtimeEfficiency.toFixed(1)}%
+                                    </span>
+                                  )}
                                   {alert.variance !== undefined && (
                                     <span className="text-xs px-2 py-1 bg-white/70 rounded">
-                                      Variación: {alert.variance}
+                                      Variación: {alert.variance > 0 ? '+' : ''}{alert.variance.toFixed(2)}
                                     </span>
                                   )}
                                   {alert.efficiency !== undefined && (
@@ -859,7 +1070,7 @@ export default function AdminDashboard() {
 
         {/* Summary Cards */}
         {summary && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6 mb-6">
             <div className="bg-white rounded-xl shadow-sm p-5">
               <div className="text-sm font-medium text-gray-500 mb-2">Objetivo Total</div>
               <div className="text-2xl font-bold text-gray-900">
@@ -880,6 +1091,23 @@ export default function AdminDashboard() {
               <div className="text-sm font-medium text-gray-500 mb-2">Operadores</div>
               <div className="text-2xl font-bold text-gray-900">{summary.operatorsCount}</div>
               <div className="text-sm text-gray-500 mt-1">En Línea</div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm p-5">
+              <div className="text-sm font-medium text-gray-500 mb-2">Eficiencia RT</div>
+              <div className={`text-2xl font-bold ${getEfficiencyColor(realTimeEfficiency)}`}>
+                {realTimeEfficiency.toFixed(1)}%
+              </div>
+              <div className="text-sm text-gray-500 mt-1">Basado en tiempo actual</div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
+                <div
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    realTimeEfficiency >= 80 ? 'bg-green-600' :
+                    realTimeEfficiency >= 60 ? 'bg-yellow-600' : 'bg-red-600'
+                  }`}
+                  style={{ width: `${Math.min(realTimeEfficiency, 100)}%` }}
+                ></div>
+              </div>
             </div>
 
             <div className="bg-white rounded-xl shadow-sm p-5">
@@ -955,6 +1183,9 @@ export default function AdminDashboard() {
                       Eficiencia
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Eficiencia RT
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Variación
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -967,6 +1198,7 @@ export default function AdminDashboard() {
                   {operatorDetails.map((operator, index) => {
                     const opKey = `${operator.operatorNo}-${operator.operationName}`;
                     const realTimePlanned = operationRealTimeTargets[opKey] ?? operator.plannedQty;
+                    const realTimeEff = operationRealTimeEfficiencies[opKey] ?? 0;
                     const varianceReal = operator.totalSewed - realTimePlanned;
                     const varianceClassReal = varianceReal >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50";
 
@@ -1027,6 +1259,12 @@ export default function AdminDashboard() {
                             }`}
                           >
                             {operator.efficiency}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${getEfficiencyColor(realTimeEff)}`}>
+                            {realTimeEff.toFixed(1)}%
                           </span>
                         </td>
 

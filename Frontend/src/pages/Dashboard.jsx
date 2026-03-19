@@ -15,11 +15,11 @@ function toYMD(d) {
   return dt.toISOString().slice(0, 10);
 }
 
-// Helper function to calculate finished garments
+// Helper function to calculate finished garments (from packing operations)
 const calculateFinishedGarments = (runData) => {
   if (!runData) return 0;
   let total = 0;
-  const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished'];
+  const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
   
   for (const block of runData.operations || []) {
     for (const op of block.operations || []) {
@@ -35,8 +35,8 @@ const calculateFinishedGarments = (runData) => {
   return total;
 };
 
-// Helper function to calculate real-time target
-const computeRealtimeTarget = (runData, selectedDate) => {
+// Helper function to calculate real-time efficiency
+const calculateRealtimeEfficiency = (runData, selectedDate) => {
   if (!runData || !selectedDate) return 0;
   
   const now = new Date();
@@ -45,7 +45,7 @@ const computeRealtimeTarget = (runData, selectedDate) => {
   // Production timeline: 8:00 AM start
   const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
   
-  // Get the last slot end time (should be 17:36:00)
+  // Get the last slot end time
   const slots = (runData.slots || [])
     .map(slot => {
       const end = new Date(`${todayStr}T${slot.slot_end}`);
@@ -58,25 +58,72 @@ const computeRealtimeTarget = (runData, selectedDate) => {
     ? new Date(Math.max(...slots.map(s => s.end.getTime())))
     : new Date(`${todayStr}T17:36:00`);
   
-  const slotsWithTargets = (runData.slots || [])
-    .map(slot => {
-      const start = new Date(`${todayStr}T${slot.slot_start}`);
-      const end = new Date(`${todayStr}T${slot.slot_end}`);
-      
-      const slotTarget = (runData.slotTargets || []).find(
-        st => st.slot_label === slot.slot_label
-      )?.slot_target || 0;
-      
-      return { 
-        ...slot, 
-        start, 
-        end,
-        target: Number(slotTarget)
-      };
-    })
-    .filter(s => s.start && s.end);
+  // If production hasn't started yet
+  if (now < PRODUCTION_START) {
+    return 0;
+  }
   
-  if (slotsWithTargets.length === 0) return 0;
+  // If production has ended for the day
+  if (now >= PRODUCTION_END) {
+    // Calculate full day efficiency using total production
+    const sewed = calculateFinishedGarments(runData);
+    const totalSAMOutput = sewed * (runData.run?.sam_minutes || 0);
+    const totalAvailableMinutes = (runData.operators?.length || 0) * 
+                                  (runData.run?.working_hours || 0) * 60;
+    
+    return totalAvailableMinutes > 0 
+      ? (totalSAMOutput / totalAvailableMinutes) * 100 
+      : 0;
+  }
+  
+  // Calculate elapsed time in minutes
+  const elapsedMilliseconds = now - PRODUCTION_START;
+  const elapsedMinutes = elapsedMilliseconds / (1000 * 60);
+  
+  // Get actual working hours so far (in minutes)
+  const actualWorkingMinutes = Math.min(
+    elapsedMinutes,
+    (PRODUCTION_END - PRODUCTION_START) / (1000 * 60)
+  );
+  
+  // Calculate SAM produced so far (only from packing operations)
+  const sewedSoFar = calculateFinishedGarments(runData);
+  const samProducedSoFar = sewedSoFar * (runData.run?.sam_minutes || 0);
+  
+  // Calculate available minutes so far (operators * actual time elapsed)
+  const operatorsCount = runData.operators?.length || 0;
+  const availableMinutesSoFar = operatorsCount * actualWorkingMinutes;
+  
+  // Calculate real-time efficiency
+  const realtimeEfficiency = availableMinutesSoFar > 0 
+    ? (samProducedSoFar / availableMinutesSoFar) * 100 
+    : 0;
+  
+  return Math.round(realtimeEfficiency * 100) / 100;
+};
+
+// Helper function to calculate real-time target
+const computeRealtimeTarget = (runData, selectedDate) => {
+  if (!runData || !selectedDate) return 0;
+  
+  const now = new Date();
+  const todayStr = selectedDate;
+  
+  // Production timeline: 8:00 AM start
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  
+  // Get the last slot end time
+  const slots = (runData.slots || [])
+    .map(slot => {
+      const end = new Date(`${todayStr}T${slot.slot_end}`);
+      return { ...slot, end };
+    })
+    .filter(s => s.end);
+  
+  // Find the latest end time from slots
+  const PRODUCTION_END = slots.length > 0 
+    ? new Date(Math.max(...slots.map(s => s.end.getTime())))
+    : new Date(`${todayStr}T17:36:00`);
   
   const totalTarget = runData.run?.target_pcs || 0;
   
@@ -111,9 +158,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Real-time efficiency states
   const [globalRealtimeTarget, setGlobalRealtimeTarget] = useState(0);
+  const [globalRealtimeEfficiency, setGlobalRealtimeEfficiency] = useState(0);
   const [lineRealtimeTargets, setLineRealtimeTargets] = useState({});
   const [lineEfficiencies, setLineEfficiencies] = useState({});
+  const [lineRealtimeEfficiencies, setLineRealtimeEfficiencies] = useState({});
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
   const [hoveredCard, setHoveredCard] = useState(null);
@@ -156,78 +206,121 @@ export default function Dashboard() {
 
   useEffect(() => {
     const fetchLineDetails = async () => {
-      if (!lineData.length || !date) return;
-      const token = localStorage.getItem('token');
-      const headers = { Authorization: `Bearer ${token}` };
-      const newRunData = {};
-      const newTargets = {};
-      const newEfficiencies = {};
+  if (!lineData.length || !date) return;
+  const token = localStorage.getItem('token');
+  const headers = { Authorization: `Bearer ${token}` };
+  const newRunData = {};
+  const newTargets = {};
+  const newEfficiencies = {};
+  const newRealtimeEfficiencies = {};
+  
+  // For global calculation - matching Skyrina's approach
+  let globalWeightedEff = 0;
+  let globalTargets = 0;
+  
+  for (const line of lineData) {
+    try {
+      const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
+      if (!runsRes.data.success) continue;
+        
+      // DEBUG: Log what we get from API
+      console.log(`Runs for line ${line.lineNo} on date ${date}:`, runsRes.data.runs);
       
-      for (const line of lineData) {
-        try {
-          const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
-          if (!runsRes.data.success) continue;
-          
-          // Get ALL runs for this line on the selected date (multiple styles possible)
-          const runsForDate = runsRes.data.runs.filter(r => toYMD(r.run_date) === date);
-          
-          if (runsForDate.length === 0) continue;
-          
-          // Store all runs for this line
-          const lineRuns = [];
-          let totalSewed = 0;
-          let totalTarget = 0;
-          
-          for (const run of runsForDate) {
-            const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
-            if (!detailRes.data.success) continue;
-            
-            lineRuns.push({
-              ...detailRes.data,
-              runId: run.id,
-              style: run.style
-            });
-            
-            const finishedGarments = calculateFinishedGarments(detailRes.data);
-            totalSewed += finishedGarments;
-            totalTarget += Number(detailRes.data.run?.target_pcs || 0);
-          }
-          
-          newRunData[line.lineNo] = lineRuns;
-          
-          // Calculate real-time target based on first run's slots (assuming same schedule)
-          if (lineRuns.length > 0) {
-            const rt = computeRealtimeTarget(lineRuns[0], date);
-            newTargets[line.lineNo] = rt;
-          } else {
-            newTargets[line.lineNo] = 0;
-          }
-          
-          // Calculate overall efficiency for the line
-          const operatorsCount = lineRuns.reduce((sum, run) => sum + (run.operators?.length || 0), 0);
-          const workingHours = lineRuns.length > 0 ? (lineRuns[0].run?.working_hours || 0) : 0;
-          const totalSAMOutput = lineRuns.reduce((sum, run) => {
-            return sum + (calculateFinishedGarments(run) * (run.run?.sam_minutes || 0));
-          }, 0);
-          
-          const availableMinutes = operatorsCount * workingHours * 60;
-          const efficiency = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
-          newEfficiencies[line.lineNo] = Math.round(efficiency * 100) / 100;
-          
-        } catch (err) {
-          console.error(`Error fetching details for line ${line.lineNo}:`, err);
+      // Get ALL runs for this line on the selected date (multiple styles possible)
+      const runsForDate = runsRes.data.runs.filter(r => toYMD(r.run_date) === date);
+      console.log(`Filtered runs for line ${line.lineNo}:`, runsForDate);
+
+      if (runsForDate.length === 0) continue;
+  
+      // Store all runs for this line
+      const lineRuns = [];
+      let totalSewed = 0;
+      let totalTarget = 0;
+      
+      // For line-level weighted calculation
+      let lineWeightedEff = 0;
+      let lineTargets = 0;
+      
+      for (const run of runsForDate) {
+        const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
+        if (!detailRes.data.success) continue;
+        
+        lineRuns.push({
+          ...detailRes.data,
+          runId: run.id,
+          style: run.style
+        });
+        
+        const finishedGarments = calculateFinishedGarments(detailRes.data);
+        totalSewed += finishedGarments;
+        totalTarget += Number(detailRes.data.run?.target_pcs || 0);
+        
+        // Calculate real-time efficiency and target for this run
+        const rtEff = calculateRealtimeEfficiency(detailRes.data, date);
+        const rtTarget = computeRealtimeTarget(detailRes.data, date);
+        
+        // Add to line weighted calculation
+        if (rtTarget > 0) {
+          lineWeightedEff += rtEff * rtTarget;
+          lineTargets += rtTarget;
+        }
+        
+        // Add to global weighted calculation (Skyrina approach)
+        if (rtTarget > 0) {
+          globalWeightedEff += rtEff * rtTarget;
+          globalTargets += rtTarget;
         }
       }
       
-      setLineRunData(newRunData);
-      setLineRealtimeTargets(newTargets);
-      setLineEfficiencies(newEfficiencies);
+      newRunData[line.lineNo] = lineRuns;
       
-      const sum = Object.values(newTargets).reduce((a, b) => a + b, 0);
-      setGlobalRealtimeTarget(sum);
-    };
+      // Calculate real-time target based on first run's slots (assuming same schedule)
+      if (lineRuns.length > 0) {
+        const rt = computeRealtimeTarget(lineRuns[0], date);
+        newTargets[line.lineNo] = rt;
+        
+        // Calculate line real-time efficiency using weighted average (Skyrina approach)
+        const lineEff = lineTargets > 0 ? lineWeightedEff / lineTargets : 0;
+        newRealtimeEfficiencies[line.lineNo] = Math.round(lineEff * 100) / 100;
+      } else {
+        newTargets[line.lineNo] = 0;
+        newRealtimeEfficiencies[line.lineNo] = 0;
+      }
+      
+      // Calculate overall efficiency for the line
+      const operatorsCount = lineRuns.reduce((sum, run) => sum + (run.operators?.length || 0), 0);
+      const workingHours = lineRuns.length > 0 ? (lineRuns[0].run?.working_hours || 0) : 0;
+      const totalSAMOutput = lineRuns.reduce((sum, run) => {
+        return sum + (calculateFinishedGarments(run) * (run.run?.sam_minutes || 0));
+      }, 0);
+      
+      const availableMinutes = operatorsCount * workingHours * 60;
+      const efficiency = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
+      newEfficiencies[line.lineNo] = Math.round(efficiency * 100) / 100;
+      
+    } catch (err) {
+      console.error(`Error fetching details for line ${line.lineNo}:`, err);
+    }
+  }
+  
+  setLineRunData(newRunData);
+  setLineRealtimeTargets(newTargets);
+  setLineEfficiencies(newEfficiencies);
+  setLineRealtimeEfficiencies(newRealtimeEfficiencies);
+  
+  const targetSum = Object.values(newTargets).reduce((a, b) => a + b, 0);
+  setGlobalRealtimeTarget(targetSum);
+  
+  // Calculate global real-time efficiency using Skyrina's approach
+  const globalEff = globalTargets > 0 ? globalWeightedEff / globalTargets : 0;
+  setGlobalRealtimeEfficiency(Math.round(globalEff * 100) / 100);
+};
     
     fetchLineDetails();
+    
+    // Update every minute for real-time data
+    const interval = setInterval(fetchLineDetails, 60000);
+    return () => clearInterval(interval);
   }, [lineData, date]);
 
   const fetchDashboardData = async (selectedDate) => {
@@ -260,6 +353,7 @@ export default function Dashboard() {
     setLineRunData({});
     setLineRealtimeTargets({});
     setLineEfficiencies({});
+    setLineRealtimeEfficiencies({});
   };
 
   const formatNumber = (value) => {
@@ -267,6 +361,14 @@ export default function Dashboard() {
     return Number(value).toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
+    });
+  };
+
+  const formatDecimal = (value) => {
+    if (value == null) return '0';
+    return Number(value).toLocaleString(undefined, {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1
     });
   };
 
@@ -281,7 +383,7 @@ export default function Dashboard() {
 
   const getStatusDot = (value, type) => {
     if (value === undefined || value === null) return 'bg-gray-400';
-    if (type === 'efficiency') {
+    if (type === 'efficiency' || type === 'realtimeEfficiency') {
       if (value < 60) return 'bg-red-500';
       if (value < 80) return 'bg-yellow-500';
       return 'bg-green-500';
@@ -291,12 +393,13 @@ export default function Dashboard() {
       if (value < 90) return 'bg-yellow-500';
       return 'bg-green-500';
     }
-    if (type === 'realtimeEfficiency') {
-      if (value < 60) return 'bg-red-500';
-      if (value < 80) return 'bg-yellow-500';
-      return 'bg-green-500';
-    }
     return 'bg-gray-400';
+  };
+
+  const getEfficiencyColor = (efficiency) => {
+    if (efficiency >= 80) return "text-green-600 bg-green-50";
+    if (efficiency >= 60) return "text-yellow-600 bg-yellow-50";
+    return "text-red-600 bg-red-50";
   };
 
   const getEfficiencyDotColor = (eff) => {
@@ -361,7 +464,8 @@ export default function Dashboard() {
 
         {/* Error message */}
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-6 py-4 rounded-xl mb-8 animate-slideDown flex items-center gap-3 shadow-md">
+          <div className="bg-red-50 border-l-4 border-red-500 
+          text-red-700 px-6 py-4 rounded-xl mb-8 animate-slideDown flex items-center gap-3 shadow-md">
             <div>
               <p className="font-semibold">Error al cargar datos</p>
               <p className="text-sm text-red-600">{error}</p>
@@ -371,13 +475,32 @@ export default function Dashboard() {
 
         {/* Summary Cards */}
         {!loading && summary && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-5 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-5 mb-8">
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
                 <div>
-                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Objetivo Total</p>
+                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">META</p>
                   <p className="text-3xl font-bold text-gray-900">{formatNumber(summary.totalTarget)}</p>
                   <p className="text-xs text-gray-500 mt-2">piezas</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Meta RT</p>
+                  <p className="text-3xl font-bold text-gray-900">{formatNumber(globalRealtimeTarget)}</p>
+                  <p className="text-xs text-gray-500 mt-2">piezas esperadas ahora</p>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
+                    <div
+                      className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${summary.totalTarget > 0 ? (globalRealtimeTarget / summary.totalTarget) * 100 : 0}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {summary.totalTarget > 0 ? ((globalRealtimeTarget / summary.totalTarget) * 100).toFixed(1) : 0}% del total
+                  </p>
                 </div>
               </div>
             </div>
@@ -392,42 +515,39 @@ export default function Dashboard() {
               </div>
             </div>
 
-            
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
               <div className="flex justify-between items-start">
                 <div className="w-full">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`w-3 h-3 rounded-full ${getStatusDot(
-                      globalRealtimeTarget > 0 ? (summary.totalSewed / globalRealtimeTarget) * 100 : 0,
-                      'realtimeEfficiency'
-                    )}`}></span>
-                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">EFF RT</p>
+                    <span className={`w-3 h-3 rounded-full ${getStatusDot(globalRealtimeEfficiency, 'realtimeEfficiency')}`}></span>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Eficiencia RT</p>
                   </div>
-                  <p className="text-3xl font-bold text-gray-900">
-                    {globalRealtimeTarget > 0
-                      ? ((summary.totalSewed / globalRealtimeTarget) * 100).toFixed(1)
-                      : '0'}%
+                  <p className={`text-3xl font-bold ${getEfficiencyColor(globalRealtimeEfficiency)}`}>
+                    {formatDecimal(globalRealtimeEfficiency)}%
                   </p>
-                  <p className="text-xs text-gray-500 mt-2">de la meta en tiempo real</p>
+                  <p className="text-xs text-gray-500 mt-2">Basado en tiempo actual</p>
                   <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
                     <div
-                      className="bg-purple-600 h-1.5 rounded-full transition-all duration-500"
-                      style={{
-                        width: `${
-                          globalRealtimeTarget > 0
-                            ? Math.min((summary.totalSewed / globalRealtimeTarget) * 100, 100)
-                            : 0
-                        }%`,
-                      }}
+                      className={`h-1.5 rounded-full transition-all duration-500 ${
+                        globalRealtimeEfficiency >= 80 ? 'bg-green-600' :
+                        globalRealtimeEfficiency >= 60 ? 'bg-yellow-600' : 'bg-red-600'
+                      }`}
+                      style={{ width: `${Math.min(globalRealtimeEfficiency, 100)}%` }}
                     ></div>
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {summary.totalSewed.toLocaleString()} /{' '}
-                    {globalRealtimeTarget.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })} piezas
-                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+              <div className="flex justify-between items-start">
+                <div className="w-full">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`w-3 h-3 rounded-full ${getStatusDot(summary.overallEfficiency, 'efficiency')}`}></span>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider"> Diario Eficiencia</p>
+                  </div>
+                  <p className="text-3xl font-bold text-gray-900">{formatNumber(summary.overallEfficiency)}%</p>
+                  <p className="text-xs text-gray-500 mt-2">basado en día completo</p>
                 </div>
               </div>
             </div>
@@ -450,267 +570,280 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Meta en tiempo real</p>
-                  <p className="text-3xl font-bold text-gray-900">{formatNumber(globalRealtimeTarget)}</p>
-                  <p className="text-xs text-gray-500 mt-2">piezas esperadas hasta ahora</p>
-                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
-                    <div
-                      className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
-                      style={{ width: `${summary.totalTarget > 0 ? (globalRealtimeTarget / summary.totalTarget) * 100 : 0}%` }}
-                    ></div>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {summary.totalTarget > 0 ? ((globalRealtimeTarget / summary.totalTarget) * 100).toFixed(1) : 0}% del objetivo global
-                  </p>
-                </div>
-              </div>
-            </div>
+            
 
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-              <div className="flex justify-between items-start">
-                <div className="w-full">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`w-3 h-3 rounded-full ${getStatusDot(summary.overallEfficiency, 'efficiency')}`}></span>
-                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Eficiencia</p>
-                  </div>
-                  <p className="text-3xl font-bold text-gray-900">{formatNumber(summary.overallEfficiency)}</p>
-                  <p className="text-xs text-gray-500 mt-2">% based on whole day</p>
-                </div>
-              </div>
-            </div>
+            
           </div>
         )}
 
         {/* Line Performance Chart */}
         {!loading && lineData.length > 0 ? (
-  <div className="overflow-x-auto -mx-4 sm:mx-0">
-    <div className="min-w-[600px] sm:min-w-0 px-4 sm:px-0">
-      <ResponsiveContainer width="100%" height={isMobile ? 350 : 450}>
-        <ComposedChart
-          data={(() => {
-            // First, ensure we have unique line numbers
-            const uniqueLines = [...new Set(lineData.map(item => item.lineNo))];
-            
-            // Sort line numbers numerically
-            const sortedLineNos = uniqueLines.sort((a, b) => {
-              const numA = parseInt(a) || 0;
-              const numB = parseInt(b) || 0;
-              return numA - numB;
-            });
-            
-            // Map to chart data with proper aggregation
-            return sortedLineNos.map(lineNo => {
-              // Get all runs for this line
-              const runs = lineRunData[lineNo] || [];
-              
-              // Aggregate totals across all styles/runs for this line
-              const aggregatedData = runs.reduce((acc, run) => {
-                const sewed = calculateFinishedGarments(run);
-                const realtimeTarget = computeRealtimeTarget(run, date);
-                const operatorsCount = run.operators?.length || 0;
-                const workingHours = run.run?.working_hours || 0;
-                const sam = run.run?.sam_minutes || 0;
-                const totalSAMOutput = sewed * sam;
-                const availableMinutes = operatorsCount * workingHours * 60;
-                
-                return {
-                  totalSewed: acc.totalSewed + sewed,
-                  realtimeTarget: acc.realtimeTarget + realtimeTarget,
-                  totalSAMOutput: acc.totalSAMOutput + totalSAMOutput,
-                  availableMinutes: acc.availableMinutes + availableMinutes,
-                  operatorCount: acc.operatorCount + operatorsCount,
-                  // Store individual style data for tooltip
-                  styles: [...acc.styles, {
-                    name: run.style,
-                    sewed,
-                    realtimeTarget,
-                    efficiency: availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0,
-                    sam,
-                    operators: operatorsCount
-                  }]
-                };
-              }, {
-                totalSewed: 0,
-                realtimeTarget: 0,
-                totalSAMOutput: 0,
-                availableMinutes: 0,
-                operatorCount: 0,
-                styles: []
-              });
-
-              // Calculate weighted average efficiency for the line
-              const efficiency = aggregatedData.availableMinutes > 0 
-                ? (aggregatedData.totalSAMOutput / aggregatedData.availableMinutes) * 100 
-                : 0;
-
-              return {
-                lineNo: lineNo,
-                totalSewed: aggregatedData.totalSewed,
-                realtimeTarget: aggregatedData.realtimeTarget,
-                efficiency: Math.round(efficiency * 100) / 100,
-                styleCount: runs.length,
-                styles: aggregatedData.styles.sort((a, b) => a.name.localeCompare(b.name))
-              };
-            });
-          })()}
-          margin={{ top: 20, right: 30, left: 20, bottom: isMobile ? 70 : 40 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-          <XAxis
-            dataKey="lineNo"
-            type="category"
-            angle={isMobile ? -45 : 0}
-            textAnchor={isMobile ? 'end' : 'middle'}
-            height={isMobile ? 70 : 30}
-            interval={0}
-            tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
-            label={{ value: 'Número de Línea', position: 'bottom', offset: 50, fill: '#6b7280' }}
-          />
-          <YAxis
-            yAxisId="left"
-            tickFormatter={formatNumber}
-            stroke="#8884d8"
-            tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
-            label={{ value: 'Cantidad', angle: -90, position: 'insideLeft', fill: '#6b7280' }}
-          />
-          <YAxis
-            yAxisId="right"
-            orientation="right"
-            tickFormatter={(value) => `${value}%`}
-            stroke="#10b981"
-            tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
-            label={{ value: 'Eficiencia %', angle: 90, position: 'insideRight', fill: '#6b7280' }}
-          />
-          <Tooltip
-            content={({ active, payload, label }) => {
-              if (active && payload && payload.length) {
-                const data = payload[0].payload;
-                
-                return (
-                  <div className="bg-white/95 backdrop-blur-sm rounded-xl shadow-xl border border-gray-200 p-4 min-w-[320px]">
-                    <div className="border-b border-gray-200 pb-2 mb-3">
-                      <p className="font-bold text-gray-900 text-lg">
-                        Línea {data.lineNo}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {data.styleCount} {data.styleCount === 1 ? 'estilo' : 'estilos'}
-                      </p>
-                    </div>
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
+            <div className="min-w-[600px] sm:min-w-0 px-4 sm:px-0">
+              <ResponsiveContainer width="100%" height={isMobile ? 350 : 450}>
+                <ComposedChart
+                  data={(() => {
+                    // First, ensure we have unique line numbers
+                    const uniqueLines = [...new Set(lineData.map(item => item.lineNo))];
                     
-                    {/* Show each style's details */}
-                    {data.styles.map((style, idx) => (
-                      <div key={idx} className="mb-4 last:mb-0">
-                        <p className="font-semibold text-gray-800 text-base mb-2">
-                          {style.name}
-                        </p>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="bg-purple-50 p-3 rounded-lg">
-                            <span className="text-purple-600 text-xs block font-medium">Objetivo (ahora)</span>
-                            <span className="text-xl font-bold text-purple-700">
-                              {formatNumber(style.realtimeTarget)}
-                            </span>
-                          </div>
-                          <div className="bg-green-50 p-3 rounded-lg">
-                            <span className="text-green-600 text-xs block font-medium">Producido</span>
-                            <span className="text-xl font-bold text-green-700">
-                              {formatNumber(style.sewed)}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="mt-2 flex justify-between items-center">
-                          <span className="text-sm text-gray-600">Eficiencia:</span>
-                          <span className={`text-lg font-bold ${
-                            style.efficiency >= 80 ? 'text-green-600' :
-                            style.efficiency >= 60 ? 'text-yellow-600' :
-                            'text-red-600'
-                          }`}>
-                            {style.efficiency.toFixed(1)}%
-                          </span>
-                        </div>
-                        {idx < data.styles.length - 1 && (
-                          <div className="border-b border-gray-200 my-3"></div>
-                        )}
-                      </div>
-                    ))}
+                    // Sort line numbers numerically
+                    const sortedLineNos = uniqueLines.sort((a, b) => {
+                      const numA = parseInt(a) || 0;
+                      const numB = parseInt(b) || 0;
+                      return numA - numB;
+                    });
                     
-                    {/* Show totals */}
-                    <div className="mt-4 pt-3 border-t-2 border-gray-200">
-                      <p className="text-sm font-medium text-gray-700 mb-3">Totales de línea:</p>
-                      <div className="grid grid-cols-3 gap-3 text-center">
-                        <div className="bg-gray-50 p-2 rounded-lg">
-                          <span className="text-xs text-gray-500 block">Objetivo</span>
-                          <span className="text-lg font-bold text-gray-900">{formatNumber(data.realtimeTarget)}</span>
-                        </div>
-                        <div className="bg-gray-50 p-2 rounded-lg">
-                          <span className="text-xs text-gray-500 block">Producido</span>
-                          <span className="text-lg font-bold text-gray-900">{formatNumber(data.totalSewed)}</span>
-                        </div>
-                        <div className="bg-gray-50 p-2 rounded-lg">
-                          <span className="text-xs text-gray-500 block">Eficiencia</span>
-                          <span className="text-lg font-bold text-gray-900">{data.efficiency}%</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-              return null;
-            }}
-          />
-          <Legend
-            wrapperStyle={{ fontSize: isMobile ? 12 : 14, paddingTop: '20px' }}
-            iconType="circle"
-          />
+                    // Map to chart data with proper aggregation
+                    return sortedLineNos.map(lineNo => {
+                      // Get all runs for this line
+                      const runs = lineRunData[lineNo] || [];
+                      
+                      // Aggregate totals across all styles/runs for this line
+                      const aggregatedData = runs.reduce((acc, run) => {
+                        const sewed = calculateFinishedGarments(run);
+                        const realtimeTarget = computeRealtimeTarget(run, date);
+                        const realtimeEff = calculateRealtimeEfficiency(run, date);
+                        const operatorsCount = run.operators?.length || 0;
+                        const workingHours = run.run?.working_hours || 0;
+                        const sam = run.run?.sam_minutes || 0;
+                        const totalSAMOutput = sewed * sam;
+                        const availableMinutes = operatorsCount * workingHours * 60;
+                        
+                        return {
+                          totalSewed: acc.totalSewed + sewed,
+                          realtimeTarget: acc.realtimeTarget + realtimeTarget,
+                          realtimeEfficiency: acc.realtimeEfficiency + realtimeEff,
+                          totalSAMOutput: acc.totalSAMOutput + totalSAMOutput,
+                          availableMinutes: acc.availableMinutes + availableMinutes,
+                          operatorCount: acc.operatorCount + operatorsCount,
+                          runCount: acc.runCount + 1,
+                          // Store individual style data for tooltip
+                          styles: [...acc.styles, {
+                            name: run.style,
+                            sewed,
+                            realtimeTarget,
+                            realtimeEfficiency: realtimeEff,
+                            efficiency: availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0,
+                            sam,
+                            operators: operatorsCount
+                          }]
+                        };
+                      }, {
+                        totalSewed: 0,
+                        realtimeTarget: 0,
+                        realtimeEfficiency: 0,
+                        totalSAMOutput: 0,
+                        availableMinutes: 0,
+                        operatorCount: 0,
+                        runCount: 0,
+                        styles: []
+                      });
 
-          <Bar
-            yAxisId="left"
-            dataKey="totalSewed"
-            fill="#10b981"
-            name="Producido"
-            barSize={isMobile ? 20 : 35}
-            radius={[4, 4, 0, 0]}
-          />
+                      // Calculate weighted average efficiency for the line
+                      const efficiency = aggregatedData.availableMinutes > 0 
+                        ? (aggregatedData.totalSAMOutput / aggregatedData.availableMinutes) * 100 
+                        : 0;
+                      
+                      // Average real-time efficiency across runs
+                      const avgRealtimeEfficiency = aggregatedData.runCount > 0 
+                        ? aggregatedData.realtimeEfficiency / aggregatedData.runCount
+                        : 0;
 
-          <Line
-            yAxisId="left"
-            type="monotone"
-            dataKey="realtimeTarget"
-            stroke="#8b5cf6"
-            strokeWidth={3}
-            dot={{ r: isMobile ? 4 : 6, fill: "#8b5cf6", strokeWidth: 2, stroke: "white" }}
-            activeDot={{ r: 8, fill: "#8b5cf6", stroke: "white", strokeWidth: 2 }}
-            name="Objetivo (ahora)"
-          />
+                      return {
+                        lineNo: lineNo,
+                        totalSewed: aggregatedData.totalSewed,
+                        realtimeTarget: aggregatedData.realtimeTarget,
+                        efficiency: Math.round(efficiency * 100) / 100,
+                        realtimeEfficiency: Math.round(avgRealtimeEfficiency * 100) / 100,
+                        styleCount: runs.length,
+                        styles: aggregatedData.styles.sort((a, b) => a.name.localeCompare(b.name))
+                      };
+                    });
+                  })()}
+                  margin={{ top: 20, right: 30, left: 20, bottom: isMobile ? 70 : 40 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="lineNo"
+                    type="category"
+                    angle={isMobile ? -45 : 0}
+                    textAnchor={isMobile ? 'end' : 'middle'}
+                    height={isMobile ? 70 : 30}
+                    interval={0}
+                    tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
+                    label={{ value: 'Número de Línea', position: 'bottom', offset: 50, fill: '#6b7280' }}
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    tickFormatter={formatNumber}
+                    stroke="#8884d8"
+                    tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
+                    label={{ value: 'Cantidad', angle: -90, position: 'insideLeft', fill: '#6b7280' }}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tickFormatter={(value) => `${value}%`}
+                    stroke="#10b981"
+                    tick={{ fontSize: isMobile ? 12 : 14, fill: '#4b5563' }}
+                    label={{ value: 'Eficiencia %', angle: 90, position: 'insideRight', fill: '#6b7280' }}
+                  />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload;
+                        
+                        return (
+                          <div className="bg-white/95 backdrop-blur-sm rounded-xl shadow-xl border border-gray-200 p-4 min-w-[320px]">
+                            <div className="border-b border-gray-200 pb-2 mb-3">
+                              <p className="font-bold text-gray-900 text-lg">
+                                Línea {data.lineNo}
+                              </p>
+                              <p className="text-sm text-gray-500">
+                                {data.styleCount} {data.styleCount === 1 ? 'estilo' : 'estilos'}
+                              </p>
+                            </div>
+                            
+                            {/* Show each style's details */}
+                            {data.styles.map((style, idx) => (
+                              <div key={idx} className="mb-4 last:mb-0">
+                                <p className="font-semibold text-gray-800 text-base mb-2">
+                                  {style.name}
+                                </p>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="bg-purple-50 p-3 rounded-lg">
+                                    <span className="text-purple-600 text-xs block font-medium">Objetivo (ahora)</span>
+                                    <span className="text-xl font-bold text-purple-700">
+                                      {formatNumber(style.realtimeTarget)}
+                                    </span>
+                                  </div>
+                                  <div className="bg-green-50 p-3 rounded-lg">
+                                    <span className="text-green-600 text-xs block font-medium">Producido</span>
+                                    <span className="text-xl font-bold text-green-700">
+                                      {formatNumber(style.sewed)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-2">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-xs text-gray-600">Diario Eficiencia:</span>
+                                    <span className={`text-sm font-bold ${
+                                      style.efficiency >= 80 ? 'text-green-600' :
+                                      style.efficiency >= 60 ? 'text-yellow-600' :
+                                      'text-red-600'
+                                    }`}>
+                                      {style.efficiency.toFixed(1)}%
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-xs text-gray-600">Eficiencia RT:</span>
+                                    <span className={`text-sm font-bold ${
+                                      style.realtimeEfficiency >= 80 ? 'text-green-600' :
+                                      style.realtimeEfficiency >= 60 ? 'text-yellow-600' :
+                                      'text-red-600'
+                                    }`}>
+                                      {style.realtimeEfficiency.toFixed(1)}%
+                                    </span>
+                                  </div>
+                                </div>
+                                {idx < data.styles.length - 1 && (
+                                  <div className="border-b border-gray-200 my-3"></div>
+                                )}
+                              </div>
+                            ))}
+                            
+                            {/* Show totals */}
+                            <div className="mt-4 pt-3 border-t-2 border-gray-200">
+                              <p className="text-sm font-medium text-gray-700 mb-3">Totales de línea:</p>
+                              <div className="grid grid-cols-3 gap-3 text-center">
+                                <div className="bg-gray-50 p-2 rounded-lg">
+                                  <span className="text-xs text-gray-500 block">Objetivo RT</span>
+                                  <span className="text-lg font-bold text-gray-900">{formatNumber(data.realtimeTarget)}</span>
+                                </div>
+                                <div className="bg-gray-50 p-2 rounded-lg">
+                                  <span className="text-xs text-gray-500 block">Producido</span>
+                                  <span className="text-lg font-bold text-gray-900">{formatNumber(data.totalSewed)}</span>
+                                </div>
+                                <div className="bg-gray-50 p-2 rounded-lg">
+                                  <span className="text-xs text-gray-500 block">Eficiencia RT</span>
+                                  <span className={`text-lg font-bold ${
+                                    data.realtimeEfficiency >= 80 ? 'text-green-600' :
+                                    data.realtimeEfficiency >= 60 ? 'text-yellow-600' :
+                                    'text-red-600'
+                                  }`}>
+                                    {data.realtimeEfficiency}%
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: isMobile ? 12 : 14, paddingTop: '20px' }}
+                    iconType="circle"
+                  />
 
-          <Line
-            yAxisId="right"
-            type="monotone"
-            dataKey="efficiency"
-            stroke="#10b981"
-            strokeWidth={2}
-            dot={{ r: isMobile ? 3 : 4, fill: "#10b981", strokeWidth: 2, stroke: "white" }}
-            activeDot={{ r: 6, fill: "#10b981", stroke: "white", strokeWidth: 2 }}
-            name="Eficiencia %"
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
-  </div>
-) : (
-  !loading && (
-    <div className="text-center py-16 bg-gray-50 rounded-xl">
-      <p className="text-gray-500 text-lg font-medium">
-        No se encontraron datos de producción para esta fecha
-      </p>
-      <p className="text-gray-400 text-sm mt-2">
-        Intenta seleccionar otra fecha
-      </p>
-    </div>
-  )
-)}
+                  <Bar
+                    yAxisId="left"
+                    dataKey="totalSewed"
+                    fill="#10b981"
+                    name="Producido"
+                    barSize={isMobile ? 20 : 35}
+                    radius={[4, 4, 0, 0]}
+                  />
+
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="realtimeTarget"
+                    stroke="#8b5cf6"
+                    strokeWidth={3}
+                    dot={{ r: isMobile ? 4 : 6, fill: "#8b5cf6", strokeWidth: 2, stroke: "white" }}
+                    activeDot={{ r: 8, fill: "#8b5cf6", stroke: "white", strokeWidth: 2 }}
+                    name="Objetivo (ahora)"
+                  />
+
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="realtimeEfficiency"
+                    stroke="#f59e0b"
+                    strokeWidth={2}
+                    dot={{ r: isMobile ? 3 : 4, fill: "#f59e0b", strokeWidth: 2, stroke: "white" }}
+                    activeDot={{ r: 6, fill: "#f59e0b", stroke: "white", strokeWidth: 2 }}
+                    name="Eficiencia RT %"
+                  />
+
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="efficiency"
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    dot={{ r: isMobile ? 3 : 4, fill: "#10b981", strokeWidth: 2, stroke: "white" }}
+                    activeDot={{ r: 6, fill: "#10b981", stroke: "white", strokeWidth: 2 }}
+                    name="Eficiencia %"
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : (
+          !loading && (
+            <div className="text-center py-16 bg-gray-50 rounded-xl">
+              <p className="text-gray-500 text-lg font-medium">
+                No se encontraron datos de producción para esta fecha
+              </p>
+              <p className="text-gray-400 text-sm mt-2">
+                Intenta seleccionar otra fecha
+              </p>
+            </div>
+          )
+        )}
 
         {/* Loading state */}
         {loading && (
@@ -722,7 +855,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Line Cards - Now showing multiple styles per line */}
+        {/* Line Cards - Now showing multiple styles per line with real-time efficiency */}
         {!loading && Object.keys(lineRunData).length > 0 && (
           <div className="mt-8">
             <div className="flex items-center justify-between mb-6">
@@ -755,6 +888,7 @@ export default function Dashboard() {
                 runs.map((run, idx) => {
                   const realtimeTarget = computeRealtimeTarget(run, date);
                   const sewed = calculateFinishedGarments(run);
+                  const realtimeEff = calculateRealtimeEfficiency(run, date);
                   const variance = sewed - realtimeTarget;
                   const variancePct = realtimeTarget > 0 ? (variance / realtimeTarget) * 100 : 0;
                   const status = getLineStatus(variancePct, realtimeTarget);
@@ -805,45 +939,29 @@ export default function Dashboard() {
                       </div>
 
                       <div className="p-5">
-                        {/* Efficiency section */}
-                        {/* <div className="mb-4 flex items-center justify-between bg-gray-50 rounded-xl p-3">
-                         <div className="flex items-center gap-2">
-                            <span className={`w-3 h-3 rounded-full ${getEfficiencyDotColor(efficiency)}`}></span>
-                            <span className="text-sm font-medium text-gray-700">Eficiencia</span>
-                          </div>
-                          <span className="text-lg font-bold text-gray-900">{efficiency.toFixed(1)}%</span>
-                        </div>*/}
-
+                        {/* Real-time Efficiency Section */}
                         <div className="mb-4">
-                          <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-600">Progreso (ahora)</span>
-                            <span className="font-semibold text-gray-900">
-                              {achievementPct.toFixed(1)}%
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`w-3 h-3 rounded-full ${getEfficiencyDotColor(realtimeEff)}`}></span>
+                              <span className="text-sm font-medium text-gray-700">Eficiencia RT</span>
+                            </div>
+                            <span className={`text-lg font-bold ${getEfficiencyColor(realtimeEff)}`}>
+                              {realtimeEff.toFixed(1)}%
                             </span>
                           </div>
                           <div className="w-full bg-gray-200 rounded-full h-2">
                             <div
                               className={`h-2 rounded-full transition-all duration-500 ${
-                                variancePct < -15 ? 'bg-red-500' :
-                                variancePct < -5 ? 'bg-orange-500' :
-                                variancePct <= 5 ? 'bg-green-500' :
-                                variancePct <= 15 ? 'bg-yellow-500' : 'bg-blue-500'
+                                realtimeEff >= 80 ? 'bg-green-600' :
+                                realtimeEff >= 60 ? 'bg-yellow-600' : 'bg-red-600'
                               }`}
-                              style={{ width: `${Math.min(achievementPct, 100)}%` }}
+                              style={{ width: `${Math.min(realtimeEff, 100)}%` }}
                             ></div>
                           </div>
-
-                          <div className="flex items-center justify-between mt-2">
-                            <span className="text-xs text-gray-500">EFF RT:</span>
-                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                              achievementPct >= 80 ? 'bg-green-100 text-green-800' :
-                              achievementPct >= 60 ? 'bg-yellow-100 text-yellow-800' :
-                              'bg-red-100 text-red-800'
-                            }`}>
-                              {achievementPct.toFixed(1)}%
-                            </span>
-                          </div>
                         </div>
+
+                       
 
                         <div className="grid grid-cols-2 gap-3 mb-4">
                           <div className="bg-gray-50 rounded-xl p-3">

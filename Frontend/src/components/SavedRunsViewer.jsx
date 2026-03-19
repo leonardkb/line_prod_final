@@ -4,6 +4,7 @@ import ViewEditOperationPlanner from "./ViewEditOperationPlanner";
 import AddOperatorModal from "./AddOperatorModal";
 import EditWorkingHoursModal from "./EditWorkingHoursModal";
 import DeleteOperatorModal from "./DeleteOperatorModal";
+import EditEfficiencyModal from "./EditEfficiencyModal";
 
 // Helper to ensure dates are compared as YYYY-MM-DD strings
 const normalizeDate = (dateStr) => {
@@ -28,6 +29,8 @@ export default function SavedRunsViewer({ onBack }) {
   const [isUpdatingWorkingHours, setIsUpdatingWorkingHours] = useState(false);
   const [message, setMessage] = useState("");
   const [activePanel, setActivePanel] = useState("select"); // select, summary, operations
+  const [showEditEfficiency, setShowEditEfficiency] = useState(false);
+const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
   
   // Operators state
   const [operators, setOperators] = useState([]);
@@ -160,6 +163,41 @@ export default function SavedRunsViewer({ onBack }) {
       setIsUpdatingWorkingHours(false);
     }
   };
+
+  const handleUpdateEfficiency = async (newEfficiency) => {
+  if (!selectedRun) return;
+
+  setIsUpdatingEfficiency(true);
+  setMessage("");
+
+  try {
+    const token = localStorage.getItem("token");
+    const response = await fetch(`http://localhost:5000/api/update-efficiency/${selectedRun}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ efficiency: newEfficiency }),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      setMessage(`✅ Eficiencia actualizada. Nueva meta: ${data.newTarget.toFixed(2)} piezas`);
+      setShowEditEfficiency(false);
+      
+      // Refresh the run data to show updated values
+      await handleSelectRun(selectedRun);
+    } else {
+      setMessage(`❌ Error: ${data.error}`);
+    }
+  } catch (err) {
+    setMessage(`❌ Error al actualizar: ${err.message}`);
+  } finally {
+    setIsUpdatingEfficiency(false);
+  }
+};
 
   // Handle operator deleted
   const handleOperatorDeleted = (deletedOperatorId) => {
@@ -456,7 +494,17 @@ export default function SavedRunsViewer({ onBack }) {
                     </button>
                   </span>
                   <span>SAM: {runData.run.sam_minutes} min</span>
-                  <span>Eficiencia: {Math.round(runData.run.efficiency * 100)}%</span>
+                  {/* In the run details section, replace the efficiency display with: */}
+                  <span className="flex items-center gap-1">
+                     Eficiencia: {Math.round(runData.run.efficiency * 100)}%
+                   <button
+                    onClick={() => setShowEditEfficiency(true)}
+                     className="ml-1 text-blue-600 hover:text-blue-800"
+                         title="Editar eficiencia"
+                       >
+                        ✎
+                     </button>
+                    </span>
                 </div>
               </div>
 
@@ -634,6 +682,14 @@ export default function SavedRunsViewer({ onBack }) {
         onSave={handleUpdateWorkingHours}
         isSaving={isUpdatingWorkingHours}
       />
+      {/* Edit Efficiency Modal */}
+<EditEfficiencyModal
+  isOpen={showEditEfficiency}
+  onClose={() => setShowEditEfficiency(false)}
+  currentEfficiency={runData?.run?.efficiency}
+  onSave={handleUpdateEfficiency}
+  isSaving={isUpdatingEfficiency}
+/>
     </div>
   );
 }

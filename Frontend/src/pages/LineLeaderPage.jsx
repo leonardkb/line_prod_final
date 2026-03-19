@@ -255,6 +255,24 @@ function HourlyRow({ label, slots, renderCell, strong = false, last = false }) {
   );
 }
 
+// Helper function to calculate real-time efficiency
+const calculateRealtimeEfficiency = (finishedGarments, operatorsCount, workingHours, sam, elapsedMinutes) => {
+  if (!operatorsCount || !workingHours || !sam || !elapsedMinutes) return 0;
+  
+  // Calculate SAM produced
+  const samProduced = finishedGarments * sam;
+  
+  // Calculate available minutes so far (operators * actual time elapsed)
+  const availableMinutes = operatorsCount * elapsedMinutes;
+  
+  // Calculate real-time efficiency
+  const realtimeEfficiency = availableMinutes > 0 
+    ? (samProduced / availableMinutes) * 100 
+    : 0;
+  
+  return Math.round(realtimeEfficiency * 100) / 100;
+};
+
 export default function LineLeaderPage() {
   const navigate = useNavigate();
 
@@ -293,6 +311,7 @@ export default function LineLeaderPage() {
   const [overallEfficiency, setOverallEfficiency] = useState(0);
   const [targetAchievement, setTargetAchievement] = useState(0);
   const [realTimeEfficiency, setRealTimeEfficiency] = useState(0);
+  const [elapsedMinutes, setElapsedMinutes] = useState(0);
   // ================================================
 
   const user = useMemo(() => {
@@ -738,7 +757,7 @@ export default function LineLeaderPage() {
   const finishedGarmentsTotal = useMemo(() => {
     if (!runData) return 0;
     let total = 0;
-    const packingKeywords = ['pack', 'emp'];
+    const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
     for (const block of runData.operations || []) {
       for (const op of block.operations || []) {
         const opName = (op.operation_name || '').toLowerCase();
@@ -844,64 +863,68 @@ export default function LineLeaderPage() {
   }
 
   // ========== Real‑time target calculation ==========
-// ========== Real‑time target calculation (from 8:00 AM) ==========
-useEffect(() => {
-  if (!runData || !slots.length || !slotTargetsMap || !target) return;
+  useEffect(() => {
+    if (!runData || !slots.length || !slotTargetsMap || !target) return;
 
-  const calculateRealtime = () => {
-    const now = new Date();
-    const dateStr = header.date ? header.date.split('T')[0] : new Date().toISOString().split('T')[0];
-    
-    // Production timeline: 8:00 AM to 5:36 PM
-    const PRODUCTION_START = new Date(`${dateStr}T08:00:00`);
-    
-    // Get the last slot end time (should be 17:36:00)
-    const slotsWithTime = slots
-      .map(slot => {
-        if (!slot.slot_start || !slot.slot_end) return null;
-        const start = new Date(`${dateStr}T${slot.slot_start}`);
-        const end = new Date(`${dateStr}T${slot.slot_end}`);
-        return { ...slot, start, end };
-      })
-      .filter(s => s !== null);
-    
-    // Find the latest end time from slots (should be 17:36:00)
-    const PRODUCTION_END = slotsWithTime.length > 0 
-      ? new Date(Math.max(...slotsWithTime.map(s => s.end.getTime())))
-      : new Date(`${dateStr}T17:36:00`);
+    const calculateRealtime = () => {
+      const now = new Date();
+      const dateStr = header.date ? header.date.split('T')[0] : new Date().toISOString().split('T')[0];
+      
+      // Production timeline: 8:00 AM to 5:36 PM
+      const PRODUCTION_START = new Date(`${dateStr}T08:00:00`);
+      
+      // Get the last slot end time (should be 17:36:00)
+      const slotsWithTime = slots
+        .map(slot => {
+          if (!slot.slot_start || !slot.slot_end) return null;
+          const start = new Date(`${dateStr}T${slot.slot_start}`);
+          const end = new Date(`${dateStr}T${slot.slot_end}`);
+          return { ...slot, start, end };
+        })
+        .filter(s => s !== null);
+      
+      // Find the latest end time from slots (should be 17:36:00)
+      const PRODUCTION_END = slotsWithTime.length > 0 
+        ? new Date(Math.max(...slotsWithTime.map(s => s.end.getTime())))
+        : new Date(`${dateStr}T17:36:00`);
 
-    // If production hasn't started yet (before 8:00 AM)
-    if (now < PRODUCTION_START) {
-      setRealTimeTarget(0);
-      setRealTimeProgress(0);
-      return;
-    }
-    
-    // If production is complete (after 5:36 PM)
-    if (now >= PRODUCTION_END) {
-      setRealTimeTarget(target);
-      setRealTimeProgress(100);
-      return;
-    }
-    
-    // Calculate real-time target based on time elapsed since 8:00 AM
-    const elapsedMilliseconds = now - PRODUCTION_START;
-    const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
-    
-    if (totalProductionMilliseconds > 0) {
-      const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
-      const cumulative = target * progressRatio;
-      setRealTimeTarget(Math.min(Math.round(cumulative * 100) / 100, target));
-      setRealTimeProgress(target > 0 ? (cumulative / target) * 100 : 0);
-    }
-  };
+      // Calculate elapsed time in minutes since production start
+      const elapsedMs = now - PRODUCTION_START;
+      const elapsedMins = Math.max(0, elapsedMs / (1000 * 60));
+      setElapsedMinutes(elapsedMins);
 
-  calculateRealtime();
-  const interval = setInterval(calculateRealtime, 60000); // Update every minute
-  return () => clearInterval(interval);
-}, [runData, slots, slotTargetsMap, target, header.date]);
+      // If production hasn't started yet (before 8:00 AM)
+      if (now < PRODUCTION_START) {
+        setRealTimeTarget(0);
+        setRealTimeProgress(0);
+        return;
+      }
+      
+      // If production is complete (after 5:36 PM)
+      if (now >= PRODUCTION_END) {
+        setRealTimeTarget(target);
+        setRealTimeProgress(100);
+        return;
+      }
+      
+      // Calculate real-time target based on time elapsed since 8:00 AM
+      const elapsedMilliseconds = now - PRODUCTION_START;
+      const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
+      
+      if (totalProductionMilliseconds > 0) {
+        const progressRatio = elapsedMilliseconds / totalProductionMilliseconds;
+        const cumulative = target * progressRatio;
+        setRealTimeTarget(Math.min(Math.round(cumulative * 100) / 100, target));
+        setRealTimeProgress(target > 0 ? (cumulative / target) * 100 : 0);
+      }
+    };
 
-  // ========== Compute efficiency, achievement, real‑time efficiency using finished garments ==========
+    calculateRealtime();
+    const interval = setInterval(calculateRealtime, 60000); // Update every minute
+    return () => clearInterval(interval);
+  }, [runData, slots, slotTargetsMap, target, header.date]);
+
+  // ========== Compute overall efficiency, achievement, and real‑time efficiency ==========
   useEffect(() => {
     if (!runData || target === 0 || finishedGarmentsTotal === undefined) return;
 
@@ -909,17 +932,27 @@ useEffect(() => {
     const workingHours = Number(header.workingHours) || 0;
     const sam = Number(header.sam) || 0;
 
+    // Overall efficiency (based on full day)
     const availableMinutes = operatorsCount * workingHours * 60;
     const totalSAMOutput = finishedGarmentsTotal * sam;
     const eff = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
     setOverallEfficiency(Math.round(eff * 100) / 100);
 
+    // Target achievement
     const ach = target > 0 ? (finishedGarmentsTotal / target) * 100 : 0;
     setTargetAchievement(Math.round(ach * 100) / 100);
 
-    const rtEff = realTimeTarget > 0 ? (finishedGarmentsTotal / realTimeTarget) * 100 : 0;
-    setRealTimeEfficiency(Math.round(rtEff * 100) / 100);
-  }, [runData, target, finishedGarmentsTotal, header.operators, header.workingHours, header.sam, realTimeTarget]);
+    // REAL-TIME EFFICIENCY - based on actual time elapsed
+    const rtEff = calculateRealtimeEfficiency(
+      finishedGarmentsTotal,
+      operatorsCount,
+      workingHours,
+      sam,
+      elapsedMinutes
+    );
+    setRealTimeEfficiency(rtEff);
+    
+  }, [runData, target, finishedGarmentsTotal, header.operators, header.workingHours, header.sam, elapsedMinutes]);
 
   // ========== Helper for status dots ==========
   const getStatusDot = (value, type) => {
@@ -1041,19 +1074,43 @@ useEffect(() => {
                     <p className="text-3xl font-bold text-gray-900">{Math.round(target).toLocaleString()}</p>
                     <p className="text-xs text-gray-500 mt-2">piezas</p>
                   </div>
-
+                  {/* Meta en tiempo real */}
+                  <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Meta en tiempo real</p>
+                    <p className="text-3xl font-bold text-gray-900">
+                      {realTimeTarget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-2">piezas esperadas hasta ahora</p>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
+                      <div
+                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(realTimeProgress, 100)}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">{realTimeProgress.toFixed(1)}% del objetivo</p>
+                  </div>
                   {/* Total Cosido (finished garments) */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Total Cosido</p>
                     <p className="text-3xl font-bold text-gray-900">{Math.round(finishedGarmentsTotal).toLocaleString()}</p>
                     <p className="text-xs text-gray-500 mt-2">piezas terminadas</p>
                   </div>
-
+                  {/* Real‑time Efficiency con indicador */}
+                  <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`w-3 h-3 rounded-full ${getStatusDot(realTimeEfficiency, 'realtimeEfficiency')}`}></span>
+                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Real‑time Efficiency</p>
+                    </div>
+                    <p className="text-3xl font-bold text-gray-900">{realTimeEfficiency.toFixed(1)}%</p>
+                    <p className="text-xs text-gray-500 mt-2">basada en tiempo real</p>
+                    
+                    
+                  </div>
                   {/* Eficiencia con indicador */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`w-3 h-3 rounded-full ${getStatusDot(overallEfficiency, 'efficiency')}`}></span>
-                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Eficiencia</p>
+                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider"> Diario Eficiencia</p>
                     </div>
                     <p className="text-3xl font-bold text-gray-900">{overallEfficiency.toFixed(1)}%</p>
                     <p className="text-xs text-gray-500 mt-2">basada en SAM</p>
@@ -1074,41 +1131,9 @@ useEffect(() => {
                     </div>
                   </div>
 
-                  {/* Meta en tiempo real */}
-                  <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Meta en tiempo real</p>
-                    <p className="text-3xl font-bold text-gray-900">
-                      {realTimeTarget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-2">piezas esperadas hasta ahora</p>
-                    <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
-                      <div
-                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: `${Math.min(realTimeProgress, 100)}%` }}
-                      ></div>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">{realTimeProgress.toFixed(1)}% del objetivo</p>
-                  </div>
+                  
 
-                  {/* Real‑time Efficiency con indicador */}
-                  <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`w-3 h-3 rounded-full ${getStatusDot(realTimeEfficiency, 'realtimeEfficiency')}`}></span>
-                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Real‑time Efficiency</p>
-                    </div>
-                    <p className="text-3xl font-bold text-gray-900">{realTimeEfficiency.toFixed(1)}%</p>
-                    <p className="text-xs text-gray-500 mt-2">de la meta en tiempo real</p>
-                    <div className="w-full bg-gray-200 rounded-full h-1.5 mt-3">
-                      <div
-                        className="bg-purple-600 h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: `${Math.min(realTimeEfficiency, 100)}%` }}
-                      ></div>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {Math.round(finishedGarmentsTotal).toLocaleString()} /{' '}
-                      {realTimeTarget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} piezas
-                    </p>
-                  </div>
+                  
                 </div>
               )}
 
