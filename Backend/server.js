@@ -201,6 +201,57 @@ await client.query(`
 console.log("✅ operator_capacity_history table ready in prod_db_schema");
 
 
+// Update the work_orders table schema to include new fields
+await client.query(`
+  CREATE TABLE IF NOT EXISTS work_orders(
+    id BIGSERIAL PRIMARY KEY,
+    work_order_no VARCHAR(50) UNIQUE NOT NULL,
+    quantity NUMERIC(12,2) NOT NULL,
+    customer_name VARCHAR(100) NOT NULL,
+    style_description TEXT NOT NULL,
+    color VARCHAR(50),
+    fabric_supplier VARCHAR(100),
+    style_code VARCHAR(50),
+    line_no VARCHAR(20),
+    run_date DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    CONSTRAINT chk_quantity_positive CHECK (quantity > 0),
+    CONSTRAINT chk_status CHECK (status IN ('pending', 'assigned', 'in_progress', 'completed'))
+  );
+`);console.log("✅ work_orders table ready in prod_db_schema");
+
+// 9. Create line_assignments table (junction between work_orders and line_runs)
+await client.query(`
+  CREATE TABLE IF NOT EXISTS line_assignments(
+    id BIGSERIAL PRIMARY KEY,
+    work_order_id BIGINT NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+    line_run_id BIGINT REFERENCES line_runs(id) ON DELETE SET NULL,
+    line_no TEXT NOT NULL,
+    assigned_date DATE NOT NULL,
+    assigned_quantity NUMERIC(12,2) NOT NULL,
+    available_minutes NUMERIC(12,2) NOT NULL,
+    required_production_rate NUMERIC(12,2) NOT NULL,
+    planned_start_date DATE,
+    planned_end_date DATE,
+    priority INT DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status VARCHAR(20) NOT NULL DEFAULT 'planned',
+    CONSTRAINT chk_assigned_quantity_positive CHECK (assigned_quantity > 0),
+    CONSTRAINT chk_assignment_status CHECK (status IN ('planned', 'released', 'completed', 'cancelled'))
+  );
+`);
+console.log("✅ line_assignments table ready in prod_db_schema");
+
+// Create indexes for faster queries
+await client.query("CREATE INDEX IF NOT EXISTS idx_work_orders_status ON work_orders(status);");
+await client.query("CREATE INDEX IF NOT EXISTS idx_work_orders_wo_no ON work_orders(work_order_no);");
+await client.query("CREATE INDEX IF NOT EXISTS idx_line_assignments_line ON line_assignments(line_no, assigned_date);");
+await client.query("CREATE INDEX IF NOT EXISTS idx_line_assignments_work_order ON line_assignments(work_order_id);");
+
+
 
     // Create index for faster queries
     await client.query("CREATE INDEX IF NOT EXISTS idx_capacity_history_operation ON operator_capacity_history(operation_id);");
@@ -1931,8 +1982,112 @@ app.post("/api/duplicate-run/:runId", authenticateToken, async (req, res) => {
   }
 });
 
+// --------------------------------------------------------------
+// update the operator capacity ENDPOINTS
+// --------------------------------------------------------------
 
+// ✅ Update efficiency for a run and recalculate target
+app.put("/api/update-efficiency/:runId", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
 
+    const { runId } = req.params;
+    const { efficiency } = req.body;
+
+    if (!efficiency || efficiency <= 0 || efficiency > 1) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid efficiency between 0 and 1 is required",
+      });
+    }
+
+    // Get current run data
+    const runResult = await client.query(
+      `SELECT operators_count, working_hours, sam_minutes, target_pcs, target_per_hour
+       FROM line_runs WHERE id = $1`,
+      [runId]
+    );
+
+    if (runResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Run not found",
+      });
+    }
+
+    const run = runResult.rows[0];
+    
+    // Recalculate target based on new efficiency
+    const operators = parseFloat(run.operators_count) || 0;
+    const sam = parseFloat(run.sam_minutes) || 0;
+    const wh = parseFloat(run.working_hours) || 0;
+    const eff = parseFloat(efficiency);
+
+    // Calculate new target
+    const totalMinutes = operators * wh * 60;
+    const piecesAt100 = sam > 0 ? totalMinutes / sam : 0;
+    const newTarget = piecesAt100 * eff;
+    
+    // Calculate new target per hour
+    const newTargetPerHour = wh > 0 ? newTarget / wh : 0;
+
+    // Update the run with new efficiency and recalculated targets
+    await client.query(
+      `UPDATE line_runs 
+       SET efficiency = $1, 
+           target_pcs = $2,
+           target_per_hour = $3,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [eff, newTarget, newTargetPerHour, runId]
+    );
+
+    // Also update slot targets (redistribute target across slots proportionally)
+    const slotsResult = await client.query(
+      `SELECT id, planned_hours FROM shift_slots WHERE run_id = $1 ORDER BY slot_order`,
+      [runId]
+    );
+
+    if (slotsResult.rows.length > 0) {
+      const totalPlannedHours = slotsResult.rows.reduce((sum, slot) => sum + parseFloat(slot.planned_hours), 0);
+      
+      let cumulativeTarget = 0;
+      for (const slot of slotsResult.rows) {
+        const slotHours = parseFloat(slot.planned_hours);
+        const slotTarget = totalPlannedHours > 0 ? (slotHours / totalPlannedHours) * newTarget : 0;
+        cumulativeTarget += slotTarget;
+
+        await client.query(
+          `UPDATE slot_targets 
+           SET slot_target = $1, cumulative_target = $2, updated_at = NOW()
+           WHERE run_id = $3 AND slot_id = $4`,
+          [slotTarget, cumulativeTarget, runId, slot.id]
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Efficiency updated successfully",
+      newTarget,
+      newTargetPerHour,
+      efficiency: eff
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error updating efficiency:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
 
 // --------------------------------------------------------------
 // update the operator capacity ENDPOINTS
@@ -2128,8 +2283,6 @@ app.get("/api/run-capacity-history/:runId", authenticateToken, async (req, res) 
     client.release();
   }
 });
-
-
 
 
 
@@ -2432,7 +2585,1688 @@ app.get("/api/supervisor/line-performance", authenticateToken, requireSupervisor
   }
 });
 
+// ========== WORK ORDER MANAGEMENT ==========
 
+/**
+ * GET /api/work-orders
+ * Get all work orders with optional filters
+ */
+app.get("/api/work-orders", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { status, lineNo, startDate, endDate } = req.query;
+    
+    let query = `
+      SELECT 
+        id,
+        work_order_no,
+        quantity,
+        customer_name,
+        style_description,
+        color,
+        fabric_supplier,
+        style_code,
+        line_no,
+        run_date,
+        created_at,
+        updated_at,
+        status
+      FROM work_orders
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramIndex = 1;
+    
+    if (status) {
+      query += ` AND status = $${paramIndex++}`;
+      params.push(status);
+    }
+    
+    if (lineNo) {
+      query += ` AND line_no = $${paramIndex++}`;
+      params.push(lineNo);
+    }
+    
+    if (startDate) {
+      query += ` AND run_date >= $${paramIndex++}`;
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ` AND run_date <= $${paramIndex++}`;
+      params.push(endDate);
+    }
+    
+    query += ` ORDER BY created_at DESC`;
+    
+    const result = await client.query(query, params);
+    
+    res.json({
+      success: true,
+      workOrders: result.rows,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching work orders:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/work-orders/:id
+ * Get a specific work order by ID
+ */
+app.get("/api/work-orders/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { id } = req.params;
+    
+    const result = await client.query(
+      `
+      SELECT 
+        wo.*,
+        json_agg(
+          json_build_object(
+            'id', la.id,
+            'line_no', la.line_no,
+            'assigned_date', la.assigned_date,
+            'assigned_quantity', la.assigned_quantity,
+            'status', la.status,
+            'planned_start_date', la.planned_start_date,
+            'planned_end_date', la.planned_end_date
+          )
+        ) FILTER (WHERE la.id IS NOT NULL) as assignments
+      FROM work_orders wo
+      LEFT JOIN line_assignments la ON wo.id = la.work_order_id
+      WHERE wo.id = $1
+      GROUP BY wo.id
+      `,
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found",
+      });
+    }
+    
+    res.json({
+      success: true,
+      workOrder: result.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error fetching work order:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/work-orders
+ * Create a new work order
+ */
+app.post("/api/work-orders", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const {
+      workOrderNo,
+      quantity,
+      customerName,
+      styleDescription,
+      color,
+      fabricSupplier,
+      styleCode,
+      lineNo,
+      runDate,
+    } = req.body;
+    
+    // Validate required fields
+    if (!workOrderNo || !quantity || !customerName || !styleDescription) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: workOrderNo, quantity, customerName, styleDescription",
+      });
+    }
+    
+    // Check if work order number already exists
+    const existingCheck = await client.query(
+      "SELECT id FROM work_orders WHERE work_order_no = $1",
+      [workOrderNo]
+    );
+    
+    if (existingCheck.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Work order number already exists",
+      });
+    }
+    
+    const result = await client.query(
+      `
+      INSERT INTO work_orders (
+        work_order_no,
+        quantity,
+        customer_name,
+        style_description,
+        color,
+        fabric_supplier,
+        style_code,
+        line_no,
+        run_date,
+        created_at,
+        updated_at,
+        status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), 'pending')
+      RETURNING id, work_order_no, quantity, customer_name, style_description, status, created_at
+      `,
+      [
+        workOrderNo,
+        parseFloat(quantity),
+        customerName,
+        styleDescription,
+        color || null,
+        fabricSupplier || null,
+        styleCode || null,
+        lineNo || null,
+        runDate || null,
+      ]
+    );
+    
+    res.json({
+      success: true,
+      message: "Work order created successfully",
+      workOrder: result.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error creating work order:", err.message);
+    
+    if (err.code === "23505") {
+      return res.status(400).json({
+        success: false,
+        error: "Work order number already exists",
+      });
+    }
+    
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * PUT /api/work-orders/:id
+ * Update an existing work order
+ */
+app.put("/api/work-orders/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { id } = req.params;
+    const {
+      workOrderNo,
+      quantity,
+      customerName,
+      styleDescription,
+      color,
+      fabricSupplier,
+      styleCode,
+      lineNo,
+      runDate,
+      status,
+    } = req.body;
+    
+    // Build update query dynamically
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (workOrderNo !== undefined) {
+      updates.push(`work_order_no = $${paramIndex++}`);
+      values.push(workOrderNo);
+    }
+    
+    if (quantity !== undefined) {
+      updates.push(`quantity = $${paramIndex++}`);
+      values.push(parseFloat(quantity));
+    }
+    
+    if (customerName !== undefined) {
+      updates.push(`customer_name = $${paramIndex++}`);
+      values.push(customerName);
+    }
+    
+    if (styleDescription !== undefined) {
+      updates.push(`style_description = $${paramIndex++}`);
+      values.push(styleDescription);
+    }
+    
+    if (color !== undefined) {
+      updates.push(`color = $${paramIndex++}`);
+      values.push(color || null);
+    }
+    
+    if (fabricSupplier !== undefined) {
+      updates.push(`fabric_supplier = $${paramIndex++}`);
+      values.push(fabricSupplier || null);
+    }
+    
+    if (styleCode !== undefined) {
+      updates.push(`style_code = $${paramIndex++}`);
+      values.push(styleCode || null);
+    }
+    
+    if (lineNo !== undefined) {
+      updates.push(`line_no = $${paramIndex++}`);
+      values.push(lineNo || null);
+    }
+    
+    if (runDate !== undefined) {
+      updates.push(`run_date = $${paramIndex++}`);
+      values.push(runDate || null);
+    }
+    
+    if (status !== undefined) {
+      updates.push(`status = $${paramIndex++}`);
+      values.push(status);
+    }
+    
+    updates.push(`updated_at = NOW()`);
+    
+    if (updates.length === 1) {
+      return res.status(400).json({
+        success: false,
+        error: "No fields to update",
+      });
+    }
+    
+    values.push(id);
+    
+    const query = `
+      UPDATE work_orders 
+      SET ${updates.join(", ")}
+      WHERE id = $${paramIndex}
+      RETURNING id, work_order_no, quantity, customer_name, style_description, status, updated_at
+    `;
+    
+    const result = await client.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found",
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "Work order updated successfully",
+      workOrder: result.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error updating work order:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * PUT /api/work-orders/:id/status
+ * Update work order status
+ */
+app.put("/api/work-orders/:id/status", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    const validStatuses = ['pending', 'assigned', 'in_progress', 'completed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid status. Must be one of: " + validStatuses.join(', '),
+      });
+    }
+    
+    const result = await client.query(
+      `
+      UPDATE work_orders
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING id, work_order_no, status
+      `,
+      [status, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Work order not found" });
+    }
+    
+    res.json({
+      success: true,
+      message: "Work order status updated",
+      workOrder: result.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error updating work order status:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * DELETE /api/work-orders/:id
+ * Soft delete a work order
+ */
+app.delete("/api/work-orders/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    
+    const { id } = req.params;
+    
+    // Check if work order has active assignments
+    const assignmentsCheck = await client.query(
+      `
+      SELECT id FROM line_assignments 
+      WHERE work_order_id = $1 AND status IN ('planned', 'released', 'in_progress')
+      `,
+      [id]
+    );
+    
+    if (assignmentsCheck.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot delete work order with active assignments. Cancel assignments first.",
+      });
+    }
+    
+    // Soft delete by setting status to 'cancelled'
+    const result = await client.query(
+      `
+      UPDATE work_orders
+      SET status = 'cancelled', updated_at = NOW()
+      WHERE id = $1 AND status != 'completed'
+      RETURNING id, work_order_no
+      `,
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found or already completed",
+      });
+    }
+    
+    await client.query("COMMIT");
+    
+    res.json({
+      success: true,
+      message: "Work order cancelled successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error cancelling work order:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ========== LINE ASSIGNMENTS ==========
+
+/**
+ * GET /api/line-assignments
+ * Get all line assignments with optional filters
+ */
+app.get("/api/line-assignments", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { lineNo, date, status, workOrderId } = req.query;
+    
+    let query = `
+      SELECT 
+        la.id,
+        la.work_order_id,
+        la.line_run_id,
+        la.line_no,
+        la.assigned_date,
+        la.assigned_quantity,
+        la.available_minutes,
+        la.required_production_rate,
+        la.planned_start_date,
+        la.planned_end_date,
+        la.priority,
+        la.created_at,
+        la.updated_at,
+        la.status,
+        wo.work_order_no,
+        wo.customer_name,
+        wo.style_description,
+        wo.color,
+        wo.style_code,
+        lr.operators_count,
+        lr.working_hours,
+        lr.target_pcs,
+        lr.sam_minutes,
+        lr.efficiency
+      FROM line_assignments la
+      JOIN work_orders wo ON la.work_order_id = wo.id
+      LEFT JOIN line_runs lr ON la.line_run_id = lr.id
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramIndex = 1;
+    
+    if (lineNo) {
+      query += ` AND la.line_no = $${paramIndex++}`;
+      params.push(lineNo);
+    }
+    
+    if (date) {
+      query += ` AND la.assigned_date = $${paramIndex++}`;
+      params.push(date);
+    }
+    
+    if (status) {
+      query += ` AND la.status = $${paramIndex++}`;
+      params.push(status);
+    }
+    
+    if (workOrderId) {
+      query += ` AND la.work_order_id = $${paramIndex++}`;
+      params.push(workOrderId);
+    }
+    
+    query += ` ORDER BY la.priority DESC, la.assigned_date, la.created_at DESC`;
+    
+    const result = await client.query(query, params);
+    
+    res.json({
+      success: true,
+      assignments: result.rows,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching line assignments:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/line-assignments/:id
+ * Get a specific line assignment by ID
+ */
+app.get("/api/line-assignments/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { id } = req.params;
+    
+    const result = await client.query(
+      `
+      SELECT 
+        la.*,
+        wo.work_order_no,
+        wo.customer_name,
+        wo.style_description,
+        wo.color,
+        wo.fabric_supplier,
+        wo.style_code,
+        lr.operators_count,
+        lr.working_hours,
+        lr.target_pcs,
+        lr.sam_minutes,
+        lr.efficiency,
+        lr.target_per_hour
+      FROM line_assignments la
+      JOIN work_orders wo ON la.work_order_id = wo.id
+      LEFT JOIN line_runs lr ON la.line_run_id = lr.id
+      WHERE la.id = $1
+      `,
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Assignment not found",
+      });
+    }
+    
+    res.json({
+      success: true,
+      assignment: result.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error fetching assignment:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/line-assignments
+ * Create a new line assignment
+ */
+app.post("/api/line-assignments", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    
+    const {
+      workOrderId,
+      lineNo,
+      assignedDate,
+      quantity,
+      plannedStartDate,
+      plannedEndDate,
+      priority = 0,
+    } = req.body;
+    
+    // Validate required fields
+    if (!workOrderId || !lineNo || !assignedDate || !quantity) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: workOrderId, lineNo, assignedDate, quantity",
+      });
+    }
+    
+    // Get work order details
+    const workOrderResult = await client.query(
+      "SELECT work_order_no, quantity as total_quantity, status FROM work_orders WHERE id = $1",
+      [workOrderId]
+    );
+    
+    if (workOrderResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found",
+      });
+    }
+    
+    const workOrder = workOrderResult.rows[0];
+    
+    // Check if work order is already completed
+    if (workOrder.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot assign to a completed work order",
+      });
+    }
+    
+    // Get line run for the specified line and date
+    const lineRunResult = await client.query(
+      `
+      SELECT id, working_hours, operators_count, target_pcs, target_per_hour, sam_minutes, efficiency
+      FROM line_runs
+      WHERE line_no = $1 AND run_date = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [lineNo, assignedDate]
+    );
+    
+    let lineRunId = null;
+    let availableMinutes = 0;
+    let requiredProductionRate = 0;
+    let lineCapacity = 0;
+    
+    if (lineRunResult.rows.length > 0) {
+      const lineRun = lineRunResult.rows[0];
+      lineRunId = lineRun.id;
+      availableMinutes = lineRun.operators_count * lineRun.working_hours * 60;
+      requiredProductionRate = lineRun.target_per_hour || 0;
+      lineCapacity = lineRun.target_pcs;
+    } else {
+      // If no line run exists for that date, get the most recent line run for capacity estimation
+      const recentLineRun = await client.query(
+        `
+        SELECT working_hours, operators_count, target_pcs, target_per_hour
+        FROM line_runs
+        WHERE line_no = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [lineNo]
+      );
+      
+      if (recentLineRun.rows.length > 0) {
+        const lineRun = recentLineRun.rows[0];
+        availableMinutes = lineRun.operators_count * lineRun.working_hours * 60;
+        requiredProductionRate = lineRun.target_per_hour || 0;
+        lineCapacity = lineRun.target_pcs;
+      } else {
+        // Default values if no line run exists
+        availableMinutes = 8 * 60; // 8 hours * 60 minutes
+        requiredProductionRate = quantity / 8; // Rough estimate
+        lineCapacity = quantity; // Assume capacity equals quantity
+      }
+    }
+    
+    // Check total assigned quantity for this work order
+    const existingAssignmentsTotal = await client.query(
+      `
+      SELECT COALESCE(SUM(assigned_quantity), 0) as total_assigned
+      FROM line_assignments
+      WHERE work_order_id = $1 AND status != 'cancelled'
+      `,
+      [workOrderId]
+    );
+    
+    const totalAssigned = parseFloat(existingAssignmentsTotal.rows[0].total_assigned);
+    const remainingToAssign = workOrder.total_quantity - totalAssigned;
+    
+    if (parseFloat(quantity) > remainingToAssign) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot assign ${quantity} pieces. Only ${remainingToAssign} pieces remaining for this work order.`,
+      });
+    }
+    
+    // Check if line has enough capacity for the date
+    const existingLineAssignments = await client.query(
+      `
+      SELECT COALESCE(SUM(assigned_quantity), 0) as total_assigned
+      FROM line_assignments
+      WHERE line_no = $1 AND assigned_date = $2 AND status IN ('planned', 'released', 'in_progress')
+      `,
+      [lineNo, assignedDate]
+    );
+    
+    const totalLineAssigned = parseFloat(existingLineAssignments.rows[0].total_assigned);
+    const remainingLineCapacity = lineCapacity - totalLineAssigned;
+    
+    if (parseFloat(quantity) > remainingLineCapacity) {
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient capacity on Line ${lineNo} for ${assignedDate}. Available: ${remainingLineCapacity.toFixed(0)} pieces`,
+      });
+    }
+    
+    // Calculate production days based on quantity and line capacity
+    const daysNeeded = quantity / lineCapacity;
+    const calculatedEndDate = plannedEndDate || new Date(new Date(plannedStartDate || new Date()).setDate(
+      new Date(plannedStartDate || new Date()).getDate() + Math.ceil(daysNeeded)
+    )).toISOString().split('T')[0];
+    
+    // Create assignment
+    const result = await client.query(
+      `
+      INSERT INTO line_assignments (
+        work_order_id,
+        line_run_id,
+        line_no,
+        assigned_date,
+        assigned_quantity,
+        available_minutes,
+        required_production_rate,
+        planned_start_date,
+        planned_end_date,
+        priority,
+        created_at,
+        updated_at,
+        status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW(), 'planned')
+      RETURNING id
+      `,
+      [
+        workOrderId,
+        lineRunId,
+        lineNo,
+        assignedDate,
+        parseFloat(quantity),
+        availableMinutes,
+        requiredProductionRate,
+        plannedStartDate || null,
+        calculatedEndDate,
+        priority,
+      ]
+    );
+    
+    // Update work order status to 'assigned' if it was pending
+    if (workOrder.status === 'pending') {
+      await client.query(
+        `
+        UPDATE work_orders
+        SET status = 'assigned', updated_at = NOW()
+        WHERE id = $1
+        `,
+        [workOrderId]
+      );
+    }
+    
+    await client.query("COMMIT");
+    
+    res.json({
+      success: true,
+      message: `Work order assigned to Line ${lineNo} successfully`,
+      assignmentId: result.rows[0].id,
+      daysNeeded: Math.ceil(daysNeeded * 10) / 10,
+      endDate: calculatedEndDate,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error creating line assignment:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * PUT /api/line-assignments/:id
+ * Update an existing line assignment
+ */
+app.put("/api/line-assignments/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    
+    const { id } = req.params;
+    const {
+      assignedQuantity,
+      plannedStartDate,
+      plannedEndDate,
+      priority,
+      status,
+    } = req.body;
+    
+    // Get current assignment
+    const currentAssignment = await client.query(
+      `
+      SELECT la.*, wo.total_quantity, wo.work_order_no
+      FROM line_assignments la
+      JOIN work_orders wo ON la.work_order_id = wo.id
+      WHERE la.id = $1
+      `,
+      [id]
+    );
+    
+    if (currentAssignment.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Assignment not found",
+      });
+    }
+    
+    const assignment = currentAssignment.rows[0];
+    
+    // Build update query
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (assignedQuantity !== undefined && assignedQuantity !== assignment.assigned_quantity) {
+      // Check if changing quantity affects capacity
+      const quantityDiff = parseFloat(assignedQuantity) - assignment.assigned_quantity;
+      
+      if (quantityDiff > 0) {
+        // Need to check if there's additional capacity
+        const lineAssignments = await client.query(
+          `
+          SELECT COALESCE(SUM(assigned_quantity), 0) as total_assigned
+          FROM line_assignments
+          WHERE line_no = $1 AND assigned_date = $2 
+            AND id != $3 AND status IN ('planned', 'released', 'in_progress')
+          `,
+          [assignment.line_no, assignment.assigned_date, id]
+        );
+        
+        const totalLineAssigned = parseFloat(lineAssignments.rows[0].total_assigned);
+        
+        // Get line capacity
+        const lineRun = await client.query(
+          `
+          SELECT target_pcs FROM line_runs 
+          WHERE line_no = $1 AND run_date = $2
+          LIMIT 1
+          `,
+          [assignment.line_no, assignment.assigned_date]
+        );
+        
+        const lineCapacity = lineRun.rows.length > 0 ? lineRun.rows[0].target_pcs : assignment.assigned_quantity;
+        const remainingCapacity = lineCapacity - totalLineAssigned;
+        
+        if (quantityDiff > remainingCapacity) {
+          return res.status(400).json({
+            success: false,
+            error: `Insufficient capacity to increase quantity. Available: ${remainingCapacity.toFixed(0)} pieces`,
+          });
+        }
+      }
+      
+      updates.push(`assigned_quantity = $${paramIndex++}`);
+      values.push(parseFloat(assignedQuantity));
+    }
+    
+    if (plannedStartDate !== undefined) {
+      updates.push(`planned_start_date = $${paramIndex++}`);
+      values.push(plannedStartDate || null);
+    }
+    
+    if (plannedEndDate !== undefined) {
+      updates.push(`planned_end_date = $${paramIndex++}`);
+      values.push(plannedEndDate || null);
+    }
+    
+    if (priority !== undefined) {
+      updates.push(`priority = $${paramIndex++}`);
+      values.push(priority);
+    }
+    
+    if (status !== undefined) {
+      const validStatuses = ['planned', 'released', 'in_progress', 'completed', 'cancelled'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid status",
+        });
+      }
+      updates.push(`status = $${paramIndex++}`);
+      values.push(status);
+    }
+    
+    updates.push(`updated_at = NOW()`);
+    
+    if (updates.length === 1) {
+      return res.status(400).json({
+        success: false,
+        error: "No fields to update",
+      });
+    }
+    
+    values.push(id);
+    
+    const query = `
+      UPDATE line_assignments 
+      SET ${updates.join(", ")}
+      WHERE id = $${paramIndex}
+      RETURNING id
+    `;
+    
+    await client.query(query, values);
+    
+    // If status is being updated to 'completed', check if all assignments for this work order are completed
+    if (status === 'completed') {
+      const remainingAssignments = await client.query(
+        `
+        SELECT COUNT(*) as incomplete
+        FROM line_assignments
+        WHERE work_order_id = $1 
+          AND status NOT IN ('completed', 'cancelled')
+          AND id != $2
+        `,
+        [assignment.work_order_id, id]
+      );
+      
+      if (parseInt(remainingAssignments.rows[0].incomplete) === 0) {
+        await client.query(
+          `
+          UPDATE work_orders
+          SET status = 'completed', updated_at = NOW()
+          WHERE id = $1
+          `,
+          [assignment.work_order_id]
+        );
+      }
+    }
+    
+    await client.query("COMMIT");
+    
+    res.json({
+      success: true,
+      message: "Assignment updated successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error updating assignment:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * PUT /api/line-assignments/:id/status
+ * Update assignment status
+ */
+app.put("/api/line-assignments/:id/status", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    const validStatuses = ['planned', 'released', 'in_progress', 'completed', 'cancelled'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid status",
+      });
+    }
+    
+    // Get assignment details
+    const assignmentResult = await client.query(
+      `
+      SELECT work_order_id
+      FROM line_assignments
+      WHERE id = $1
+      `,
+      [id]
+    );
+    
+    if (assignmentResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Assignment not found" });
+    }
+    
+    const workOrderId = assignmentResult.rows[0].work_order_id;
+    
+    // Update assignment status
+    await client.query(
+      `
+      UPDATE line_assignments
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+      `,
+      [status, id]
+    );
+    
+    // If completed, check if all assignments for this work order are completed
+    if (status === 'completed') {
+      const remainingAssignments = await client.query(
+        `
+        SELECT COUNT(*) as incomplete
+        FROM line_assignments
+        WHERE work_order_id = $1 AND status NOT IN ('completed', 'cancelled')
+        `,
+        [workOrderId]
+      );
+      
+      if (parseInt(remainingAssignments.rows[0].incomplete) === 0) {
+        await client.query(
+          `
+          UPDATE work_orders
+          SET status = 'completed', updated_at = NOW()
+          WHERE id = $1
+          `,
+          [workOrderId]
+        );
+      }
+    }
+    
+    // If cancelled, check if we need to update work order status
+    if (status === 'cancelled') {
+      const activeAssignments = await client.query(
+        `
+        SELECT COUNT(*) as active
+        FROM line_assignments
+        WHERE work_order_id = $1 AND status IN ('planned', 'released', 'in_progress')
+        `,
+        [workOrderId]
+      );
+      
+      if (parseInt(activeAssignments.rows[0].active) === 0) {
+        await client.query(
+          `
+          UPDATE work_orders
+          SET status = 'pending', updated_at = NOW()
+          WHERE id = $1
+          `,
+          [workOrderId]
+        );
+      }
+    }
+    
+    await client.query("COMMIT");
+    
+    res.json({
+      success: true,
+      message: `Assignment status updated to ${status}`,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error updating assignment status:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * DELETE /api/line-assignments/:id
+ * Cancel/delete an assignment
+ */
+app.delete("/api/line-assignments/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    
+    const { id } = req.params;
+    
+    // Get assignment details
+    const assignmentResult = await client.query(
+      `
+      SELECT work_order_id, status
+      FROM line_assignments
+      WHERE id = $1
+      `,
+      [id]
+    );
+    
+    if (assignmentResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Assignment not found" });
+    }
+    
+    const { work_order_id, status } = assignmentResult.rows[0];
+    
+    // Soft delete by setting status to 'cancelled'
+    await client.query(
+      `
+      UPDATE line_assignments
+      SET status = 'cancelled', updated_at = NOW()
+      WHERE id = $1
+      `,
+      [id]
+    );
+    
+    // Check if work order has any active assignments left
+    const activeAssignments = await client.query(
+      `
+      SELECT COUNT(*) as active
+      FROM line_assignments
+      WHERE work_order_id = $1 AND status IN ('planned', 'released', 'in_progress')
+      `,
+      [work_order_id]
+    );
+    
+    if (parseInt(activeAssignments.rows[0].active) === 0) {
+      await client.query(
+        `
+        UPDATE work_orders
+        SET status = 'pending', updated_at = NOW()
+        WHERE id = $1
+        `,
+        [work_order_id]
+      );
+    }
+    
+    await client.query("COMMIT");
+    
+    res.json({
+      success: true,
+      message: "Assignment cancelled successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error cancelling assignment:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ========== PLANNING DASHBOARD ENDPOINTS ==========
+
+/**
+ * GET /api/planning/dashboard
+ * Get planning dashboard summary
+ */
+app.get("/api/planning/dashboard", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { date } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    
+    // Get summary statistics
+    const summary = await client.query(
+      `
+      WITH work_order_stats AS (
+        SELECT 
+          COUNT(*) as total_work_orders,
+          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_orders,
+          COUNT(CASE WHEN status = 'assigned' THEN 1 END) as assigned_orders,
+          COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_orders,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_orders,
+          COALESCE(SUM(quantity), 0) as total_quantity
+        FROM work_orders
+      ),
+      assignment_stats AS (
+        SELECT 
+          COUNT(*) as total_assignments,
+          COALESCE(SUM(assigned_quantity), 0) as total_assigned_quantity,
+          COUNT(DISTINCT line_no) as lines_utilized
+        FROM line_assignments
+        WHERE assigned_date = $1 AND status IN ('planned', 'released', 'in_progress')
+      ),
+      line_capacity AS (
+        SELECT 
+          COUNT(*) as active_lines,
+          COALESCE(SUM(target_pcs), 0) as total_capacity
+        FROM line_runs
+        WHERE run_date = $1
+      )
+      SELECT 
+        wos.*,
+        ast.*,
+        lc.active_lines,
+        lc.total_capacity,
+        CASE 
+          WHEN lc.total_capacity > 0 
+          THEN (ast.total_assigned_quantity / lc.total_capacity) * 100 
+          ELSE 0 
+        END as capacity_utilization
+      FROM work_order_stats wos
+      CROSS JOIN assignment_stats ast
+      CROSS JOIN line_capacity lc
+      `,
+      [targetDate]
+    );
+    
+    // Get upcoming deadlines (assignments ending in next 3 days)
+    const upcomingDeadlines = await client.query(
+      `
+      SELECT 
+        la.id,
+        la.line_no,
+        la.assigned_quantity,
+        la.planned_end_date,
+        wo.work_order_no,
+        wo.customer_name
+      FROM line_assignments la
+      JOIN work_orders wo ON la.work_order_id = wo.id
+      WHERE la.planned_end_date BETWEEN $1 AND $2
+        AND la.status IN ('planned', 'released', 'in_progress')
+      ORDER BY la.planned_end_date
+      LIMIT 10
+      `,
+      [targetDate, new Date(new Date(targetDate).setDate(new Date(targetDate).getDate() + 3)).toISOString().split('T')[0]]
+    );
+    
+    // Get lines with highest load
+    const lineLoad = await client.query(
+      `
+      SELECT 
+        la.line_no,
+        COUNT(DISTINCT la.work_order_id) as work_orders_count,
+        COALESCE(SUM(la.assigned_quantity), 0) as total_assigned,
+        COALESCE(lr.target_pcs, 0) as daily_capacity,
+        CASE 
+          WHEN COALESCE(lr.target_pcs, 0) > 0 
+          THEN (COALESCE(SUM(la.assigned_quantity), 0) / lr.target_pcs) * 100 
+          ELSE 0 
+        END as load_percentage
+      FROM line_assignments la
+      LEFT JOIN line_runs lr ON la.line_no = lr.line_no AND lr.run_date = $1
+      WHERE la.assigned_date = $1 AND la.status IN ('planned', 'released', 'in_progress')
+      GROUP BY la.line_no, lr.target_pcs
+      ORDER BY load_percentage DESC
+      `,
+      [targetDate]
+    );
+    
+    res.json({
+      success: true,
+      date: targetDate,
+      summary: summary.rows[0] || {
+        total_work_orders: 0,
+        pending_orders: 0,
+        assigned_orders: 0,
+        in_progress_orders: 0,
+        completed_orders: 0,
+        total_quantity: 0,
+        total_assignments: 0,
+        total_assigned_quantity: 0,
+        lines_utilized: 0,
+        active_lines: 0,
+        total_capacity: 0,
+        capacity_utilization: 0,
+      },
+      upcomingDeadlines: upcomingDeadlines.rows,
+      lineLoad: lineLoad.rows,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching planning dashboard:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/planning/available-lines
+ * Get available lines for a specific date with their capacity
+ */
+app.get("/api/planning/available-lines", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { date } = req.query;
+    
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        error: "Date parameter is required",
+      });
+    }
+    
+    // Get all line runs for the date
+    const lineRuns = await client.query(
+      `
+      SELECT 
+        lr.id,
+        lr.line_no,
+        lr.operators_count,
+        lr.working_hours,
+        lr.target_pcs,
+        lr.target_per_hour,
+        lr.sam_minutes,
+        lr.efficiency,
+        lr.style
+      FROM line_runs lr
+      WHERE lr.run_date = $1
+      ORDER BY lr.line_no
+      `,
+      [date]
+    );
+    
+    // Get existing assignments for the date
+    const assignments = await client.query(
+      `
+      SELECT 
+        line_no,
+        COALESCE(SUM(assigned_quantity), 0) as assigned_quantity
+      FROM line_assignments
+      WHERE assigned_date = $1 AND status IN ('planned', 'released', 'in_progress')
+      GROUP BY line_no
+      `,
+      [date]
+    );
+    
+    const assignedMap = {};
+    assignments.rows.forEach(a => {
+      assignedMap[a.line_no] = parseFloat(a.assigned_quantity);
+    });
+    
+    // Calculate available capacity for each line
+    const availableLines = lineRuns.rows.map(run => {
+      const assigned = assignedMap[run.line_no] || 0;
+      const available = run.target_pcs - assigned;
+      
+      return {
+        ...run,
+        assigned_quantity: assigned,
+        available_capacity: Math.max(0, available),
+        is_available: available > 0,
+        utilization_percentage: run.target_pcs > 0 ? (assigned / run.target_pcs) * 100 : 0,
+      };
+    });
+    
+    res.json({
+      success: true,
+      date,
+      lines: availableLines,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching available lines:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/planning/work-order-progress/:id
+ * Get detailed progress for a specific work order
+ */
+app.get("/api/planning/work-order-progress/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { id } = req.params;
+    
+    // Get work order details with assignments
+    const workOrder = await client.query(
+      `
+      SELECT 
+        wo.*,
+        COALESCE(SUM(la.assigned_quantity), 0) as total_assigned,
+        COUNT(la.id) as assignments_count,
+        COUNT(CASE WHEN la.status = 'completed' THEN 1 END) as completed_assignments
+      FROM work_orders wo
+      LEFT JOIN line_assignments la ON wo.id = la.work_order_id
+      WHERE wo.id = $1
+      GROUP BY wo.id
+      `,
+      [id]
+    );
+    
+    if (workOrder.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found",
+      });
+    }
+    
+    const wo = workOrder.rows[0];
+    
+    // Calculate progress
+    const progress = {
+      total_quantity: parseFloat(wo.quantity),
+      assigned_quantity: parseFloat(wo.total_assigned),
+      remaining_quantity: parseFloat(wo.quantity) - parseFloat(wo.total_assigned),
+      assignments_count: parseInt(wo.assignments_count),
+      completed_assignments: parseInt(wo.completed_assignments),
+      percentage_assigned: (parseFloat(wo.total_assigned) / parseFloat(wo.quantity)) * 100,
+      status: wo.status,
+    };
+    
+    // Get detailed assignments with production data
+    const assignments = await client.query(
+      `
+      SELECT 
+        la.*,
+        lr.operators_count,
+        lr.working_hours,
+        lr.target_per_hour,
+        COALESCE(
+          (SELECT SUM(sewed_qty) 
+           FROM operation_sewed_entries se 
+           JOIN operator_operations oo ON se.operation_id = oo.id
+           JOIN run_operators ro ON oo.run_operator_id = ro.id
+           WHERE ro.run_id = la.line_run_id
+          ), 0
+        ) as actual_production
+      FROM line_assignments la
+      LEFT JOIN line_runs lr ON la.line_run_id = lr.id
+      WHERE la.work_order_id = $1
+      ORDER BY la.assigned_date, la.priority DESC
+      `,
+      [id]
+    );
+    
+    res.json({
+      success: true,
+      workOrder: wo,
+      progress,
+      assignments: assignments.rows,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching work order progress:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ========== BULK OPERATIONS ==========
+
+/**
+ * POST /api/planning/bulk-assign
+ * Bulk assign multiple work orders to lines
+ */
+app.post("/api/planning/bulk-assign", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    await client.query("BEGIN");
+    
+    const { assignments } = req.body;
+    
+    if (!assignments || !Array.isArray(assignments) || assignments.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Assignments array is required",
+      });
+    }
+    
+    const results = [];
+    const errors = [];
+    
+    for (const assign of assignments) {
+      try {
+        const {
+          workOrderId,
+          lineNo,
+          assignedDate,
+          quantity,
+          priority = 0,
+        } = assign;
+        
+        // Validate each assignment
+        if (!workOrderId || !lineNo || !assignedDate || !quantity) {
+          errors.push({
+            ...assign,
+            error: "Missing required fields",
+          });
+          continue;
+        }
+        
+        // Check line capacity
+        const lineRun = await client.query(
+          `
+          SELECT target_pcs FROM line_runs 
+          WHERE line_no = $1 AND run_date = $2
+          LIMIT 1
+          `,
+          [lineNo, assignedDate]
+        );
+        
+        const lineCapacity = lineRun.rows.length > 0 ? lineRun.rows[0].target_pcs : quantity;
+        
+        const existingAssignments = await client.query(
+          `
+          SELECT COALESCE(SUM(assigned_quantity), 0) as total_assigned
+          FROM line_assignments
+          WHERE line_no = $1 AND assigned_date = $2 AND status IN ('planned', 'released', 'in_progress')
+          `,
+          [lineNo, assignedDate]
+        );
+        
+        const totalAssigned = parseFloat(existingAssignments.rows[0].total_assigned);
+        const remainingCapacity = lineCapacity - totalAssigned;
+        
+        if (parseFloat(quantity) > remainingCapacity) {
+          errors.push({
+            ...assign,
+            error: `Insufficient capacity. Available: ${remainingCapacity.toFixed(0)} pieces`,
+          });
+          continue;
+        }
+        
+        // Create assignment
+        const result = await client.query(
+          `
+          INSERT INTO line_assignments (
+            work_order_id,
+            line_no,
+            assigned_date,
+            assigned_quantity,
+            priority,
+            created_at,
+            updated_at,
+            status
+          )
+          VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), 'planned')
+          RETURNING id
+          `,
+          [
+            workOrderId,
+            lineNo,
+            assignedDate,
+            parseFloat(quantity),
+            priority,
+          ]
+        );
+        
+        // Update work order status if needed
+        await client.query(
+          `
+          UPDATE work_orders
+          SET status = CASE 
+            WHEN status = 'pending' THEN 'assigned'
+            ELSE status
+          END,
+          updated_at = NOW()
+          WHERE id = $1
+          `,
+          [workOrderId]
+        );
+        
+        results.push({
+          ...assign,
+          assignmentId: result.rows[0].id,
+          success: true,
+        });
+      } catch (err) {
+        errors.push({
+          ...assign,
+          error: err.message,
+        });
+      }
+    }
+    
+    await client.query("COMMIT");
+    
+    res.json({
+      success: true,
+      message: `Bulk assignment completed: ${results.length} successful, ${errors.length} failed`,
+      results,
+      errors,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error in bulk assignment:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/planning/capacity-report
+ * Generate capacity report for a date range
+ */
+app.get("/api/planning/capacity-report", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await setSchema(client);
+    
+    const { startDate, endDate } = req.query;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: "startDate and endDate are required",
+      });
+    }
+    
+    const report = await client.query(
+      `
+      WITH dates AS (
+        SELECT generate_series(
+          $1::date,
+          $2::date,
+          '1 day'::interval
+        )::date as report_date
+      ),
+      line_capacity AS (
+        SELECT 
+          lr.run_date,
+          lr.line_no,
+          lr.target_pcs as daily_capacity,
+          lr.operators_count,
+          lr.working_hours
+        FROM line_runs lr
+        WHERE lr.run_date BETWEEN $1 AND $2
+      ),
+      daily_assignments AS (
+        SELECT 
+          la.assigned_date,
+          la.line_no,
+          COALESCE(SUM(la.assigned_quantity), 0) as assigned_quantity,
+          COUNT(DISTINCT la.work_order_id) as work_orders_count
+        FROM line_assignments la
+        WHERE la.assigned_date BETWEEN $1 AND $2
+          AND la.status IN ('planned', 'released', 'in_progress', 'completed')
+        GROUP BY la.assigned_date, la.line_no
+      )
+      SELECT 
+        d.report_date,
+        lc.line_no,
+        lc.daily_capacity,
+        lc.operators_count,
+        lc.working_hours,
+        COALESCE(da.assigned_quantity, 0) as assigned_quantity,
+        COALESCE(da.work_orders_count, 0) as work_orders_count,
+        CASE 
+          WHEN lc.daily_capacity > 0 
+          THEN (COALESCE(da.assigned_quantity, 0) / lc.daily_capacity) * 100 
+          ELSE 0 
+        END as utilization_percentage
+      FROM dates d
+      CROSS JOIN line_capacity lc
+      LEFT JOIN daily_assignments da ON d.report_date = da.assigned_date AND lc.line_no = da.line_no
+      ORDER BY d.report_date, lc.line_no
+      `,
+      [startDate, endDate]
+    );
+    
+    // Calculate summary statistics
+    const summary = {
+      total_days: report.rows.length,
+      average_utilization: report.rows.reduce((sum, row) => sum + row.utilization_percentage, 0) / report.rows.length,
+      total_capacity: report.rows.reduce((sum, row) => sum + parseFloat(row.daily_capacity || 0), 0),
+      total_assigned: report.rows.reduce((sum, row) => sum + parseFloat(row.assigned_quantity), 0),
+    };
+    
+    res.json({
+      success: true,
+      startDate,
+      endDate,
+      summary,
+      report: report.rows,
+    });
+  } catch (err) {
+    console.error("❌ Error generating capacity report:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
 
 // --------------------------------------------------------------
 // update-working-hours (FIXED)
