@@ -35,9 +35,42 @@ const calculateFinishedGarments = (runData) => {
   return total;
 };
 
+// Helper function to calculate daily efficiency (based on SAM)
+const calculateDailyEfficiency = (runData) => {
+  if (!runData) return 0;
+  
+  const sewed = calculateFinishedGarments(runData);
+  const operatorsCount = runData.run?.operators_count || 0;
+  const workingHours = runData.run?.working_hours || 0;
+  const sam = runData.run?.sam_minutes || 0;
+  
+  if (operatorsCount === 0 || workingHours === 0 || sam === 0) return 0;
+  
+  const availableMinutes = operatorsCount * workingHours * 60;
+  const totalSAMOutput = sewed * sam;
+  const efficiency = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
+  
+  return Math.round(efficiency * 100) / 100;
+};
+
+// Helper function to check if production has ended for the day
+const isProductionEnded = (selectedDate) => {
+  if (!selectedDate) return false;
+  const now = new Date();
+  const todayStr = selectedDate;
+  
+  const PRODUCTION_END = new Date(`${todayStr}T17:36:00`);
+  return now >= PRODUCTION_END;
+};
+
 // Helper function to calculate real-time efficiency
 const calculateRealtimeEfficiency = (runData, selectedDate) => {
   if (!runData || !selectedDate) return 0;
+  
+  // If production has ended, return null to indicate we should show daily efficiency instead
+  if (isProductionEnded(selectedDate)) {
+    return null;
+  }
   
   const now = new Date();
   const todayStr = selectedDate;
@@ -65,15 +98,7 @@ const calculateRealtimeEfficiency = (runData, selectedDate) => {
   
   // If production has ended for the day
   if (now >= PRODUCTION_END) {
-    // Calculate full day efficiency using total production
-    const sewed = calculateFinishedGarments(runData);
-    const totalSAMOutput = sewed * (runData.run?.sam_minutes || 0);
-    const totalAvailableMinutes = (runData.operators?.length || 0) * 
-                                  (runData.run?.working_hours || 0) * 60;
-    
-    return totalAvailableMinutes > 0 
-      ? (totalSAMOutput / totalAvailableMinutes) * 100 
-      : 0;
+    return null;
   }
   
   // Calculate elapsed time in minutes
@@ -91,7 +116,7 @@ const calculateRealtimeEfficiency = (runData, selectedDate) => {
   const samProducedSoFar = sewedSoFar * (runData.run?.sam_minutes || 0);
   
   // Calculate available minutes so far (operators * actual time elapsed)
-  const operatorsCount = runData.operators?.length || 0;
+  const operatorsCount = runData.run?.operators_count || 0;
   const availableMinutesSoFar = operatorsCount * actualWorkingMinutes;
   
   // Calculate real-time efficiency
@@ -105,6 +130,11 @@ const calculateRealtimeEfficiency = (runData, selectedDate) => {
 // Helper function to calculate real-time target
 const computeRealtimeTarget = (runData, selectedDate) => {
   if (!runData || !selectedDate) return 0;
+  
+  // If production has ended, return the full target
+  if (isProductionEnded(selectedDate)) {
+    return runData.run?.target_pcs || 0;
+  }
   
   const now = new Date();
   const todayStr = selectedDate;
@@ -157,10 +187,12 @@ export default function Dashboard() {
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [productionEnded, setProductionEnded] = useState(false);
 
   // Real-time efficiency states
   const [globalRealtimeTarget, setGlobalRealtimeTarget] = useState(0);
   const [globalRealtimeEfficiency, setGlobalRealtimeEfficiency] = useState(0);
+  const [globalDailyEfficiency, setGlobalDailyEfficiency] = useState(0);
   const [lineRealtimeTargets, setLineRealtimeTargets] = useState({});
   const [lineEfficiencies, setLineEfficiencies] = useState({});
   const [lineRealtimeEfficiencies, setLineRealtimeEfficiencies] = useState({});
@@ -173,6 +205,18 @@ export default function Dashboard() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Check if production has ended
+  useEffect(() => {
+    const checkProductionEnded = () => {
+      const ended = isProductionEnded(date);
+      setProductionEnded(ended);
+    };
+    
+    checkProductionEnded();
+    const interval = setInterval(checkProductionEnded, 60000);
+    return () => clearInterval(interval);
+  }, [date]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -206,115 +250,129 @@ export default function Dashboard() {
 
   useEffect(() => {
     const fetchLineDetails = async () => {
-  if (!lineData.length || !date) return;
-  const token = localStorage.getItem('token');
-  const headers = { Authorization: `Bearer ${token}` };
-  const newRunData = {};
-  const newTargets = {};
-  const newEfficiencies = {};
-  const newRealtimeEfficiencies = {};
-  
-  // For global calculation - matching Skyrina's approach
-  let globalWeightedEff = 0;
-  let globalTargets = 0;
-  
-  for (const line of lineData) {
-    try {
-      const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
-      if (!runsRes.data.success) continue;
-        
-      // DEBUG: Log what we get from API
-      console.log(`Runs for line ${line.lineNo} on date ${date}:`, runsRes.data.runs);
+      if (!lineData.length || !date) return;
+      const token = localStorage.getItem('token');
+      const headers = { Authorization: `Bearer ${token}` };
+      const newRunData = {};
+      const newTargets = {};
+      const newEfficiencies = {};
+      const newRealtimeEfficiencies = {};
       
-      // Get ALL runs for this line on the selected date (multiple styles possible)
-      const runsForDate = runsRes.data.runs.filter(r => toYMD(r.run_date) === date);
-      console.log(`Filtered runs for line ${line.lineNo}:`, runsForDate);
+      // For global calculation - weighted average based on SAM
+      let totalSAMOutputSum = 0;
+      let totalAvailableMinutesSum = 0;
+      let globalWeightedEff = 0;
+      let globalTargets = 0;
+      
+      for (const line of lineData) {
+        try {
+          const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
+          if (!runsRes.data.success) continue;
+          
+          const runsForDate = runsRes.data.runs.filter(r => toYMD(r.run_date) === date);
 
-      if (runsForDate.length === 0) continue;
-  
-      // Store all runs for this line
-      const lineRuns = [];
-      let totalSewed = 0;
-      let totalTarget = 0;
+          if (runsForDate.length === 0) continue;
       
-      // For line-level weighted calculation
-      let lineWeightedEff = 0;
-      let lineTargets = 0;
-      
-      for (const run of runsForDate) {
-        const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
-        if (!detailRes.data.success) continue;
-        
-        lineRuns.push({
-          ...detailRes.data,
-          runId: run.id,
-          style: run.style
-        });
-        
-        const finishedGarments = calculateFinishedGarments(detailRes.data);
-        totalSewed += finishedGarments;
-        totalTarget += Number(detailRes.data.run?.target_pcs || 0);
-        
-        // Calculate real-time efficiency and target for this run
-        const rtEff = calculateRealtimeEfficiency(detailRes.data, date);
-        const rtTarget = computeRealtimeTarget(detailRes.data, date);
-        
-        // Add to line weighted calculation
-        if (rtTarget > 0) {
-          lineWeightedEff += rtEff * rtTarget;
-          lineTargets += rtTarget;
-        }
-        
-        // Add to global weighted calculation (Skyrina approach)
-        if (rtTarget > 0) {
-          globalWeightedEff += rtEff * rtTarget;
-          globalTargets += rtTarget;
+          // Store all runs for this line
+          const lineRuns = [];
+          let totalSewed = 0;
+          let totalTarget = 0;
+          
+          // For line-level weighted calculation
+          let lineWeightedEff = 0;
+          let lineTargets = 0;
+          
+          for (const run of runsForDate) {
+            const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
+            if (!detailRes.data.success) continue;
+            
+            lineRuns.push({
+              ...detailRes.data,
+              runId: run.id,
+              style: run.style
+            });
+            
+            const finishedGarments = calculateFinishedGarments(detailRes.data);
+            const dailyEff = calculateDailyEfficiency(detailRes.data);
+            totalSewed += finishedGarments;
+            totalTarget += Number(detailRes.data.run?.target_pcs || 0);
+            
+            // Calculate real-time efficiency and target for this run
+            const rtEff = calculateRealtimeEfficiency(detailRes.data, date);
+            const rtTarget = computeRealtimeTarget(detailRes.data, date);
+            
+            // Accumulate for weighted global daily efficiency
+            const operatorsCount = detailRes.data.run?.operators_count || 0;
+            const workingHours = detailRes.data.run?.working_hours || 0;
+            const sam = detailRes.data.run?.sam_minutes || 0;
+            totalSAMOutputSum += finishedGarments * sam;
+            totalAvailableMinutesSum += operatorsCount * workingHours * 60;
+            
+            // Add to line weighted calculation
+            if (rtTarget > 0 && rtEff !== null) {
+              lineWeightedEff += rtEff * rtTarget;
+              lineTargets += rtTarget;
+            }
+            
+            // Add to global weighted calculation
+            if (rtTarget > 0 && rtEff !== null) {
+              globalWeightedEff += rtEff * rtTarget;
+              globalTargets += rtTarget;
+            }
+          }
+          
+          newRunData[line.lineNo] = lineRuns;
+          
+          // Calculate real-time target based on first run's slots (assuming same schedule)
+          if (lineRuns.length > 0) {
+            const rt = computeRealtimeTarget(lineRuns[0], date);
+            newTargets[line.lineNo] = rt;
+            
+            // Calculate line real-time efficiency using weighted average
+            const lineEff = lineTargets > 0 ? lineWeightedEff / lineTargets : 0;
+            newRealtimeEfficiencies[line.lineNo] = Math.round(lineEff * 100) / 100;
+          } else {
+            newTargets[line.lineNo] = 0;
+            newRealtimeEfficiencies[line.lineNo] = 0;
+          }
+          
+          // Calculate overall efficiency for the line using weighted average
+          let lineTotalSAMOutput = 0;
+          let lineTotalAvailableMinutes = 0;
+          for (const run of lineRuns) {
+            const sewed = calculateFinishedGarments(run);
+            const operatorsCount = run.run?.operators_count || 0;
+            const workingHours = run.run?.working_hours || 0;
+            const sam = run.run?.sam_minutes || 0;
+            lineTotalSAMOutput += sewed * sam;
+            lineTotalAvailableMinutes += operatorsCount * workingHours * 60;
+          }
+          const efficiency = lineTotalAvailableMinutes > 0 ? (lineTotalSAMOutput / lineTotalAvailableMinutes) * 100 : 0;
+          newEfficiencies[line.lineNo] = Math.round(efficiency * 100) / 100;
+          
+        } catch (err) {
+          console.error(`Error fetching details for line ${line.lineNo}:`, err);
         }
       }
       
-      newRunData[line.lineNo] = lineRuns;
+      setLineRunData(newRunData);
+      setLineRealtimeTargets(newTargets);
+      setLineEfficiencies(newEfficiencies);
+      setLineRealtimeEfficiencies(newRealtimeEfficiencies);
       
-      // Calculate real-time target based on first run's slots (assuming same schedule)
-      if (lineRuns.length > 0) {
-        const rt = computeRealtimeTarget(lineRuns[0], date);
-        newTargets[line.lineNo] = rt;
-        
-        // Calculate line real-time efficiency using weighted average (Skyrina approach)
-        const lineEff = lineTargets > 0 ? lineWeightedEff / lineTargets : 0;
-        newRealtimeEfficiencies[line.lineNo] = Math.round(lineEff * 100) / 100;
-      } else {
-        newTargets[line.lineNo] = 0;
-        newRealtimeEfficiencies[line.lineNo] = 0;
-      }
+      const targetSum = Object.values(newTargets).reduce((a, b) => a + b, 0);
+      setGlobalRealtimeTarget(targetSum);
       
-      // Calculate overall efficiency for the line
-      const operatorsCount = lineRuns.reduce((sum, run) => sum + (run.operators?.length || 0), 0);
-      const workingHours = lineRuns.length > 0 ? (lineRuns[0].run?.working_hours || 0) : 0;
-      const totalSAMOutput = lineRuns.reduce((sum, run) => {
-        return sum + (calculateFinishedGarments(run) * (run.run?.sam_minutes || 0));
-      }, 0);
+      // Calculate global real-time efficiency using weighted average
+      const globalEff = globalTargets > 0 ? globalWeightedEff / globalTargets : 0;
+      setGlobalRealtimeEfficiency(Math.round(globalEff * 100) / 100);
       
-      const availableMinutes = operatorsCount * workingHours * 60;
-      const efficiency = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
-      newEfficiencies[line.lineNo] = Math.round(efficiency * 100) / 100;
-      
-    } catch (err) {
-      console.error(`Error fetching details for line ${line.lineNo}:`, err);
-    }
-  }
-  
-  setLineRunData(newRunData);
-  setLineRealtimeTargets(newTargets);
-  setLineEfficiencies(newEfficiencies);
-  setLineRealtimeEfficiencies(newRealtimeEfficiencies);
-  
-  const targetSum = Object.values(newTargets).reduce((a, b) => a + b, 0);
-  setGlobalRealtimeTarget(targetSum);
-  
-  // Calculate global real-time efficiency using Skyrina's approach
-  const globalEff = globalTargets > 0 ? globalWeightedEff / globalTargets : 0;
-  setGlobalRealtimeEfficiency(Math.round(globalEff * 100) / 100);
-};
+      // Calculate weighted global daily efficiency (matching PostgreSQL)
+      const weightedGlobalDaily = totalAvailableMinutesSum > 0 
+        ? (totalSAMOutputSum / totalAvailableMinutesSum) * 100 
+        : 0;
+      setGlobalDailyEfficiency(Math.round(weightedGlobalDaily * 100) / 100);
+    };
     
     fetchLineDetails();
     
@@ -543,10 +601,12 @@ export default function Dashboard() {
               <div className="flex justify-between items-start">
                 <div className="w-full">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`w-3 h-3 rounded-full ${getStatusDot(summary.overallEfficiency, 'efficiency')}`}></span>
+                    <span className={`w-3 h-3 rounded-full ${getStatusDot(globalDailyEfficiency, 'efficiency')}`}></span>
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider"> Diario Eficiencia</p>
                   </div>
-                  <p className="text-3xl font-bold text-gray-900">{formatNumber(summary.overallEfficiency)}%</p>
+                  <p className={`text-3xl font-bold ${getEfficiencyColor(globalDailyEfficiency)}`}>
+                    {formatDecimal(globalDailyEfficiency)}%
+                  </p>
                   <p className="text-xs text-gray-500 mt-2">basado en día completo</p>
                 </div>
               </div>
@@ -569,10 +629,6 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-
-            
-
-            
           </div>
         )}
 
@@ -603,7 +659,7 @@ export default function Dashboard() {
                         const sewed = calculateFinishedGarments(run);
                         const realtimeTarget = computeRealtimeTarget(run, date);
                         const realtimeEff = calculateRealtimeEfficiency(run, date);
-                        const operatorsCount = run.operators?.length || 0;
+                        const operatorsCount = run.run?.operators_count || 0;
                         const workingHours = run.run?.working_hours || 0;
                         const sam = run.run?.sam_minutes || 0;
                         const totalSAMOutput = sewed * sam;
@@ -612,7 +668,7 @@ export default function Dashboard() {
                         return {
                           totalSewed: acc.totalSewed + sewed,
                           realtimeTarget: acc.realtimeTarget + realtimeTarget,
-                          realtimeEfficiency: acc.realtimeEfficiency + realtimeEff,
+                          realtimeEfficiency: acc.realtimeEfficiency + (realtimeEff !== null ? realtimeEff : 0),
                           totalSAMOutput: acc.totalSAMOutput + totalSAMOutput,
                           availableMinutes: acc.availableMinutes + availableMinutes,
                           operatorCount: acc.operatorCount + operatorsCount,
@@ -644,10 +700,13 @@ export default function Dashboard() {
                         ? (aggregatedData.totalSAMOutput / aggregatedData.availableMinutes) * 100 
                         : 0;
                       
-                      // Average real-time efficiency across runs
-                      const avgRealtimeEfficiency = aggregatedData.runCount > 0 
-                        ? aggregatedData.realtimeEfficiency / aggregatedData.runCount
-                        : 0;
+                      // Average real-time efficiency across runs (only count non-null values)
+                      const validRealtimeEffs = aggregatedData.styles
+                        .filter(s => s.realtimeEfficiency !== null)
+                        .map(s => s.realtimeEfficiency);
+                      const avgRealtimeEfficiency = validRealtimeEffs.length > 0 
+                        ? validRealtimeEffs.reduce((a, b) => a + b, 0) / validRealtimeEffs.length
+                        : productionEnded ? efficiency : 0;
 
                       return {
                         lineNo: lineNo,
@@ -738,11 +797,12 @@ export default function Dashboard() {
                                   <div className="flex justify-between items-center">
                                     <span className="text-xs text-gray-600">Eficiencia RT:</span>
                                     <span className={`text-sm font-bold ${
-                                      style.realtimeEfficiency >= 80 ? 'text-green-600' :
-                                      style.realtimeEfficiency >= 60 ? 'text-yellow-600' :
-                                      'text-red-600'
+                                      style.realtimeEfficiency !== null && style.realtimeEfficiency >= 80 ? 'text-green-600' :
+                                      style.realtimeEfficiency !== null && style.realtimeEfficiency >= 60 ? 'text-yellow-600' :
+                                      style.realtimeEfficiency !== null ? 'text-red-600' :
+                                      'text-gray-500'
                                     }`}>
-                                      {style.realtimeEfficiency.toFixed(1)}%
+                                      {style.realtimeEfficiency !== null ? `${style.realtimeEfficiency.toFixed(1)}%` : 'FIN'}
                                     </span>
                                   </div>
                                 </div>
@@ -771,7 +831,7 @@ export default function Dashboard() {
                                     data.realtimeEfficiency >= 60 ? 'text-yellow-600' :
                                     'text-red-600'
                                   }`}>
-                                    {data.realtimeEfficiency}%
+                                    {productionEnded ? `${data.efficiency.toFixed(1)}%` : `${data.realtimeEfficiency}%`}
                                   </span>
                                 </div>
                               </div>
@@ -815,18 +875,7 @@ export default function Dashboard() {
                     strokeWidth={2}
                     dot={{ r: isMobile ? 3 : 4, fill: "#f59e0b", strokeWidth: 2, stroke: "white" }}
                     activeDot={{ r: 6, fill: "#f59e0b", stroke: "white", strokeWidth: 2 }}
-                    name="Eficiencia RT %"
-                  />
-
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="efficiency"
-                    stroke="#10b981"
-                    strokeWidth={2}
-                    dot={{ r: isMobile ? 3 : 4, fill: "#10b981", strokeWidth: 2, stroke: "white" }}
-                    activeDot={{ r: 6, fill: "#10b981", stroke: "white", strokeWidth: 2 }}
-                    name="Eficiencia %"
+                    name={productionEnded ? "Eficiencia %" : "Eficiencia RT %"}
                   />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -855,7 +904,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Line Cards - Now showing multiple styles per line with real-time efficiency */}
+        {/* Line Cards - Now showing multiple styles per line with after 5:36 PM logic */}
         {!loading && Object.keys(lineRunData).length > 0 && (
           <div className="mt-8">
             <div className="flex items-center justify-between mb-6">
@@ -889,13 +938,19 @@ export default function Dashboard() {
                   const realtimeTarget = computeRealtimeTarget(run, date);
                   const sewed = calculateFinishedGarments(run);
                   const realtimeEff = calculateRealtimeEfficiency(run, date);
+                  const dailyEff = calculateDailyEfficiency(run);
+                  
+                  // After 5:36 PM, show daily efficiency instead of real-time
+                  const displayEfficiency = productionEnded ? dailyEff : (realtimeEff !== null ? realtimeEff : dailyEff);
+                  const efficiencyLabel = productionEnded ? 'Efficiency' : 'Eff RT';
+                  
                   const variance = sewed - realtimeTarget;
                   const variancePct = realtimeTarget > 0 ? (variance / realtimeTarget) * 100 : 0;
                   const status = getLineStatus(variancePct, realtimeTarget);
                   const achievementPct = realtimeTarget > 0 ? (sewed / realtimeTarget) * 100 : 0;
                   
                   // Calculate efficiency for this specific run
-                  const operatorsCount = run.operators?.length || 0;
+                  const operatorsCount = run.run?.operators_count || 0;
                   const workingHours = run.run?.working_hours || 0;
                   const sam = run.run?.sam_minutes || 0;
                   const availableMinutes = operatorsCount * workingHours * 60;
@@ -939,29 +994,27 @@ export default function Dashboard() {
                       </div>
 
                       <div className="p-5">
-                        {/* Real-time Efficiency Section */}
+                        {/* Efficiency Section - Changes after 5:36 PM */}
                         <div className="mb-4">
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">
-                              <span className={`w-3 h-3 rounded-full ${getEfficiencyDotColor(realtimeEff)}`}></span>
-                              <span className="text-sm font-medium text-gray-700">Eficiencia RT</span>
+                              <span className={`w-3 h-3 rounded-full ${getEfficiencyDotColor(displayEfficiency)}`}></span>
+                              <span className="text-sm font-medium text-gray-700">{efficiencyLabel}</span>
                             </div>
-                            <span className={`text-lg font-bold ${getEfficiencyColor(realtimeEff)}`}>
-                              {realtimeEff.toFixed(1)}%
+                            <span className={`text-lg font-bold ${getEfficiencyColor(displayEfficiency)}`}>
+                              {displayEfficiency.toFixed(1)}%
                             </span>
                           </div>
                           <div className="w-full bg-gray-200 rounded-full h-2">
                             <div
                               className={`h-2 rounded-full transition-all duration-500 ${
-                                realtimeEff >= 80 ? 'bg-green-600' :
-                                realtimeEff >= 60 ? 'bg-yellow-600' : 'bg-red-600'
+                                displayEfficiency >= 80 ? 'bg-green-600' :
+                                displayEfficiency >= 60 ? 'bg-yellow-600' : 'bg-red-600'
                               }`}
-                              style={{ width: `${Math.min(realtimeEff, 100)}%` }}
+                              style={{ width: `${Math.min(displayEfficiency, 100)}%` }}
                             ></div>
                           </div>
                         </div>
-
-                       
 
                         <div className="grid grid-cols-2 gap-3 mb-4">
                           <div className="bg-gray-50 rounded-xl p-3">

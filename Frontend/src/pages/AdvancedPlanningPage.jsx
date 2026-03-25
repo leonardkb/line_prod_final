@@ -1,16 +1,19 @@
-// [file name]: AdvancedPlanningPage.jsx
-import { useState, useEffect, useMemo } from "react";
-import Navbar from "../components/Navbar";
-import StyleSelector from "../components/planner/StyleSelector";
-import LineDetailsCard from "../components/planner/LineDetailsCard";
+// AdvancedPlanningPage.jsx - Complete Fixed Version
+import { useState, useEffect } from "react";
+import NavPlanner from "../components/planner/NavPlanner";
+import PlanningDashboard from "../components/planner/PlanningDashboard";
+import WorkOrderList from "../components/planner/WorkOrderList";
 import WorkOrderForm from "../components/planner/WorkOrderForm";
-import PlanningSummary from "../components/planner/PlanningSummary";
-import DaysCalculator from "../utils/calculateProductionDays";
-import { format, addDays } from "date-fns";
+import LineAssignmentForm from "../components/planner/LineAssignmentForm";
+import { format } from "date-fns";
 
 export default function AdvancedPlanningPage() {
-  const [lineRuns, setLineRuns] = useState([]);
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
+  const [showAssignmentForm, setShowAssignmentForm] = useState(false);
+  const [userRole, setUserRole] = useState(null);
+  const [message, setMessage] = useState("");
   const [workOrderData, setWorkOrderData] = useState({
     workOrderNo: "",
     quantity: "",
@@ -18,335 +21,205 @@ export default function AdvancedPlanningPage() {
     styleDescription: "",
     color: "",
     fabricSupplier: "",
+    styleCode: "",
+    lineNo: "",
+    runDate: "",
   });
-  const [calculatedDays, setCalculatedDays] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [activePanel, setActivePanel] = useState("selection"); // selection | form | summary
 
-  // Fetch all line runs for style selection
   useEffect(() => {
-    fetchLineRuns();
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    setUserRole(user.role);
   }, []);
 
-  const fetchLineRuns = async () => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem("token");
-      const response = await fetch("http://localhost:5000/api/line-runs", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await response.json();
-      if (data.success) {
-        setLineRuns(data.runs);
-      } else {
-        setMessage(`❌ Error: ${data.error}`);
-      }
-    } catch (err) {
-      setMessage(`❌ Error fetching line runs: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+  const handleSelectWorkOrder = (workOrder) => {
+    setSelectedWorkOrder(workOrder);
+    setActiveTab("assign");
   };
 
-  // Handle style selection
-  const handleStyleSelect = (run) => {
-    setSelectedRun(run);
-    setWorkOrderData(prev => ({
-      ...prev,
-      styleDescription: run.style,
-    }));
-    setActivePanel("form");
+  const handleCreateWorkOrder = () => {
+    setSelectedWorkOrder(null);
+    setWorkOrderData({
+      workOrderNo: "",
+      quantity: "",
+      customerName: "",
+      styleDescription: "",
+      color: "",
+      fabricSupplier: "",
+      styleCode: "",
+      lineNo: "",
+      runDate: "",
+    });
+    setActiveTab("create");
   };
-
-  // Calculate days needed based on quantity and line capacity
-  const calculateProductionDays = (quantity) => {
-    if (!selectedRun || !quantity) return null;
-
-    const targetPerDay = selectedRun.target_pcs;
-    const workingHours = selectedRun.working_hours;
-    const operators = selectedRun.operators_count;
-    
-    // Calculate days needed
-    const daysNeeded = quantity / targetPerDay;
-    const startDate = new Date();
-    const endDate = addDays(startDate, Math.ceil(daysNeeded));
-    
-    // Calculate hourly production rate
-    const hourlyRate = targetPerDay / workingHours;
-    
-    // Calculate minutes per piece
-    const minutesPerPiece = (workingHours * 60) / targetPerDay;
-    
-    // Calculate total minutes needed
-    const totalMinutesNeeded = quantity * minutesPerPiece;
-    
-    // Calculate minutes available per day
-    const minutesPerDay = workingHours * 60 * operators;
-    
-    return {
-      daysNeeded: Math.ceil(daysNeeded * 10) / 10,
-      workingDaysNeeded: Math.ceil(daysNeeded),
-      startDate: format(startDate, "yyyy-MM-dd"),
-      endDate: format(endDate, "yyyy-MM-dd"),
-      hourlyRate: Math.round(hourlyRate * 100) / 100,
-      minutesPerPiece: Math.round(minutesPerPiece * 100) / 100,
-      totalMinutesNeeded: Math.round(totalMinutesNeeded),
-      minutesPerDay: Math.round(minutesPerDay),
-      targetPerDay: Math.round(targetPerDay),
-      quantity: quantity,
-    };
-  };
-
-  // Update calculations when quantity changes
-  useEffect(() => {
-    if (workOrderData.quantity && selectedRun) {
-      setCalculatedDays(calculateProductionDays(parseFloat(workOrderData.quantity)));
-    } else {
-      setCalculatedDays(null);
-    }
-  }, [workOrderData.quantity, selectedRun]);
 
   const handleWorkOrderChange = (field, value) => {
     setWorkOrderData(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleSaveWorkOrder = async () => {
-    // Validate required fields
-    if (!workOrderData.workOrderNo || !workOrderData.quantity || !workOrderData.customerName) {
-      setMessage("❌ Por favor complete todos los campos requeridos");
-      return;
-    }
-
-    if (!selectedRun) {
-      setMessage("❌ Por favor seleccione un estilo primero");
-      return;
-    }
-
-    setLoading(true);
-    setMessage("");
-
-    try {
-      const token = localStorage.getItem("token");
-      
-      // First create the work order
-      const workOrderResponse = await fetch("http://localhost:5000/api/work-orders", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          workOrderNo: workOrderData.workOrderNo,
-          quantity: parseFloat(workOrderData.quantity),
-          customerName: workOrderData.customerName,
-          styleDescription: workOrderData.styleDescription,
-          color: workOrderData.color,
-          fabricSupplier: workOrderData.fabricSupplier,
-          styleCode: selectedRun.style,
-          lineNo: selectedRun.line_no,
-          runDate: selectedRun.run_date,
-        }),
-      });
-
-      const woData = await workOrderResponse.json();
-      
-      if (!woData.success) {
-        throw new Error(woData.error);
-      }
-
-      // Then create the line assignment
-      const assignmentResponse = await fetch("http://localhost:5000/api/line-assignments", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          workOrderId: woData.workOrder.id,
-          lineNo: selectedRun.line_no,
-          assignedDate: selectedRun.run_date,
-          quantity: parseFloat(workOrderData.quantity),
-          plannedStartDate: calculatedDays?.startDate,
-          plannedEndDate: calculatedDays?.endDate,
-        }),
-      });
-
-      const assignmentData = await assignmentResponse.json();
-      
-      if (!assignmentData.success) {
-        throw new Error(assignmentData.error);
-      }
-
-      setMessage(`✅ Orden de trabajo creada y asignada exitosamente a Línea ${selectedRun.line_no}`);
-      setActivePanel("summary");
-      
-      // Reset form after successful save (optional)
-      // setWorkOrderData({...});
-      // setSelectedRun(null);
-      
-    } catch (err) {
-      setMessage(`❌ Error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+  const handleStyleSelect = (run) => {
+    setSelectedRun(run);
+    setWorkOrderData(prev => ({
+      ...prev,
+      styleDescription: run.style,
+      styleCode: run.style,
+      lineNo: run.line_no,
+      runDate: run.run_date,
+    }));
   };
+
+  const tabs = [
+    { id: "dashboard", label: "Dashboard", visible: true },
+    { id: "list", label: "Órdenes", visible: true },
+    { id: "create", label: "Crear Orden", visible: ["engineer", "supervisor", "soporte_it", "skyrina"].includes(userRole) },
+    { id: "assign", label: "Asignar", visible: selectedWorkOrder !== null },
+  ];
+
+  // Clear message after 5 seconds
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => setMessage(""), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar />
+      <NavPlanner />
 
       <div className="mx-auto max-w-7xl p-4 sm:p-6">
-        {/* Header */}
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-gray-900">
-            Planificador Avanzado de Producción
+            Planificación Avanzada
           </h1>
           <p className="text-sm text-gray-600">
-            Seleccione un estilo existente, ingrese los detalles de la orden y calcule los días de producción
+            Gestione órdenes de trabajo y asignaciones a líneas de producción
           </p>
-        </div>
-
-        {/* Navigation Tabs */}
-        <div className="mb-6 flex gap-3">
-          <button
-            onClick={() => setActivePanel("selection")}
-            className={`rounded-xl px-4 py-2 text-sm font-medium border ${
-              activePanel === "selection"
-                ? "bg-gray-900 text-white border-gray-900"
-                : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
-            }`}
-          >
-            1. Seleccionar Estilo
-          </button>
-
-          <button
-            onClick={() => setActivePanel("form")}
-            disabled={!selectedRun}
-            className={`rounded-xl px-4 py-2 text-sm font-medium border ${
-              activePanel === "form" && selectedRun
-                ? "bg-gray-900 text-white border-gray-900"
-                : !selectedRun
-                ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
-                : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
-            }`}
-          >
-            2. Detalles de Orden
-          </button>
-
-          <button
-            onClick={() => setActivePanel("summary")}
-            disabled={!calculatedDays}
-            className={`rounded-xl px-4 py-2 text-sm font-medium border ${
-              activePanel === "summary" && calculatedDays
-                ? "bg-gray-900 text-white border-gray-900"
-                : !calculatedDays
-                ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
-                : "bg-white text-gray-800 border-gray-200 hover:border-gray-300"
-            }`}
-          >
-            3. Resumen y Guardar
-          </button>
         </div>
 
         {/* Message Display */}
         {message && (
-          <div
-            className={`mb-6 p-4 rounded-lg ${
-              message.includes("✅") ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
-            }`}
-          >
+          <div className={`mb-6 p-4 rounded-lg ${
+            message.includes("✅") ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+          }`}>
             {message}
           </div>
         )}
 
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column - Main Form */}
-          <div className="lg:col-span-2 space-y-6">
-            {activePanel === "selection" && (
-              <StyleSelector
-                lineRuns={lineRuns}
-                onSelect={handleStyleSelect}
-                selectedRun={selectedRun}
-                loading={loading}
-              />
-            )}
+        {/* Tabs */}
+        <div className="mb-6 flex flex-wrap gap-2 border-b">
+          {tabs.map(tab => tab.visible && (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 text-sm font-medium transition ${
+                activeTab === tab.id
+                  ? "text-gray-900 border-b-2 border-gray-900"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-            {activePanel === "form" && selectedRun && (
-              <WorkOrderForm
-                workOrderData={workOrderData}
-                onChange={handleWorkOrderChange}
-                selectedRun={selectedRun}
-              />
-            )}
-
-            {activePanel === "summary" && calculatedDays && (
-              <PlanningSummary
-                workOrderData={workOrderData}
-                selectedRun={selectedRun}
-                calculatedDays={calculatedDays}
-                onSave={handleSaveWorkOrder}
-                isSaving={loading}
-              />
-            )}
-          </div>
-
-          {/* Right Column - Line Details & Calculations */}
-          <div className="lg:col-span-1 space-y-6">
-            {selectedRun && (
-              <>
-                <LineDetailsCard lineRun={selectedRun} />
-                
-                {calculatedDays && (
-                  <div className="rounded-2xl border bg-white shadow-sm p-5">
-                    <h3 className="font-semibold text-gray-900 mb-4">
-                      Cálculo de Días
-                    </h3>
-                    
-                    <div className="space-y-3">
-                      <div className="flex justify-between py-2 border-b">
-                        <span className="text-sm text-gray-600">Cantidad:</span>
-                        <span className="text-sm font-medium">{calculatedDays.quantity} pzas</span>
-                      </div>
-                      
-                      <div className="flex justify-between py-2 border-b">
-                        <span className="text-sm text-gray-600">Meta diaria:</span>
-                        <span className="text-sm font-medium">{calculatedDays.targetPerDay} pzas/día</span>
-                      </div>
-                      
-                      <div className="flex justify-between py-2 border-b">
-                        <span className="text-sm text-gray-600">Días necesarios:</span>
-                        <span className="text-sm font-medium text-blue-600">
-                          {calculatedDays.daysNeeded} días
-                        </span>
-                      </div>
-                      
-                      <div className="flex justify-between py-2 border-b">
-                        <span className="text-sm text-gray-600">Inicio:</span>
-                        <span className="text-sm font-medium">{calculatedDays.startDate}</span>
-                      </div>
-                      
-                      <div className="flex justify-between py-2 border-b">
-                        <span className="text-sm text-gray-600">Fin estimado:</span>
-                        <span className="text-sm font-medium">{calculatedDays.endDate}</span>
-                      </div>
-                      
-                      <div className="flex justify-between py-2 border-b">
-                        <span className="text-sm text-gray-600">Minutos totales:</span>
-                        <span className="text-sm font-medium">{calculatedDays.totalMinutesNeeded} min</span>
-                      </div>
-                      
-                      <div className="flex justify-between py-2">
-                        <span className="text-sm text-gray-600">Ritmo horario:</span>
-                        <span className="text-sm font-medium">{calculatedDays.hourlyRate} pzas/h</span>
-                      </div>
-                    </div>
+        {/* Content */}
+        <div className="space-y-6">
+          {activeTab === "dashboard" && <PlanningDashboard />}
+          
+          {activeTab === "list" && (
+            <WorkOrderList 
+              onSelectWorkOrder={handleSelectWorkOrder}
+              onEdit={(order) => {
+                setSelectedWorkOrder(order);
+                setWorkOrderData({
+                  workOrderNo: order.work_order_no,
+                  quantity: order.quantity,
+                  customerName: order.customer_name,
+                  styleDescription: order.style_description,
+                  color: order.color || "",
+                  fabricSupplier: order.fabric_supplier || "",
+                  styleCode: order.style_code || "",
+                  lineNo: order.line_no || "",
+                  runDate: order.run_date || "",
+                });
+                setActiveTab("create");
+              }}
+              onDelete={() => {
+                setMessage("Orden eliminada correctamente");
+              }}
+            />
+          )}
+          
+          {activeTab === "create" && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2">
+                <WorkOrderForm
+                  workOrderData={workOrderData}
+                  onChange={handleWorkOrderChange}
+                  selectedRun={selectedRun}
+                  onSuccess={(newOrder) => {
+                    setMessage(`✅ Orden ${newOrder.work_order_no} creada exitosamente`);
+                    setActiveTab("list");
+                    // Reset form
+                    setWorkOrderData({
+                      workOrderNo: "",
+                      quantity: "",
+                      customerName: "",
+                      styleDescription: "",
+                      color: "",
+                      fabricSupplier: "",
+                      styleCode: "",
+                      lineNo: "",
+                      runDate: "",
+                    });
+                    setSelectedRun(null);
+                  }}
+                  isEditMode={false}
+                />
+              </div>
+              <div className="lg:col-span-1">
+                <div className="bg-white rounded-xl border p-4">
+                  <h3 className="font-medium text-gray-900 mb-2">Información</h3>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Complete todos los campos obligatorios para crear una nueva orden de trabajo.
+                  </p>
+                  
+                  {/* Style selection quick link */}
+                  <button
+                    onClick={() => {
+                      setActiveTab("dashboard");
+                      // You might want to navigate to style selector
+                    }}
+                    className="w-full mb-3 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 text-left"
+                  >
+                    📦 Buscar estilo existente
+                  </button>
+                  
+                  <div className="bg-blue-50 rounded-lg p-3">
+                    <p className="text-xs text-blue-800 font-medium mb-2">📋 Consejos:</p>
+                    <ul className="text-xs text-blue-700 space-y-1 list-disc list-inside">
+                      <li>Use un número de orden único y descriptivo</li>
+                      <li>Si seleccionó un estilo, la capacidad diaria se usará para estimar días</li>
+                      <li>La orden se creará con estado "Pendiente"</li>
+                      <li>Después de crear, puede asignarla a líneas desde la lista</li>
+                    </ul>
                   </div>
-                )}
-              </>
-            )}
-          </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {activeTab === "assign" && selectedWorkOrder && (
+            <LineAssignmentForm
+              workOrder={selectedWorkOrder}
+              onAssignmentComplete={() => {
+                setShowAssignmentForm(false);
+                setActiveTab("list");
+                setSelectedWorkOrder(null);
+                setMessage("✅ Asignación completada exitosamente");
+              }}
+            />
+          )}
         </div>
       </div>
     </div>
