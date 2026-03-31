@@ -106,7 +106,7 @@ const requireRole = (roles) => {
 };
 
 // Planning roles: engineer, supervisor, skyrina
-const planningRoles = ["engineer", "supervisor", "skyrina"];
+const planningRoles = ["engineer", "supervisor", "skyrina", "soporte_it", "planner"];
 
 // ========== PLANNING DASHBOARD ENDPOINTS ==========
 
@@ -272,7 +272,7 @@ app.get("/api/customers", authenticateToken, requireRole(planningRoles), async (
  * POST /api/customers
  * Create a new customer
  */
-app.post("/api/customers", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.post("/api/customers", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -352,7 +352,7 @@ app.get("/api/fabrics", authenticateToken, requireRole(planningRoles), async (re
  * POST /api/fabrics
  * Create a new fabric
  */
-app.post("/api/fabrics", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.post("/api/fabrics", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -392,7 +392,6 @@ app.post("/api/fabrics", authenticateToken, requireRole(["engineer", "supervisor
 });
 
 // ========== WORK ORDER MANAGEMENT ==========
-
 /**
  * GET /api/work-orders
  * Get all work orders with optional filters
@@ -408,11 +407,17 @@ app.get("/api/work-orders", authenticateToken, requireRole(planningRoles), async
       SELECT 
         id,
         work_order_no,
-        quantity,
+        quantity,                    -- This is the customer quantity (total to produce)
+        total_quantity,              -- Original order quantity (for reference)
+        warehouse_stock,
+        extra_quantity,
+        total_to_produce,
+        commitment_date,
+        customer_id,
         customer_name,
         style_description,
         color,
-        fabric_supplier,
+        fabrics,
         style_code,
         line_no,
         run_date,
@@ -466,7 +471,6 @@ app.get("/api/work-orders", authenticateToken, requireRole(planningRoles), async
     client.release();
   }
 });
-
 /**
  * GET /api/work-orders/:id
  * Get a specific work order by ID
@@ -526,30 +530,35 @@ app.get("/api/work-orders/:id", authenticateToken, requireRole(planningRoles), a
 
 /**
  * POST /api/work-orders
- * Create a new work order
+ * Create a new work order (Updated to match database schema)
  */
-app.post("/api/work-orders", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.post("/api/work-orders", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
     
     const {
       workOrderNo,
-      quantity,
-      customerName,
+      totalQuantity,        // Customer order quantity
+      warehouseStock,       // Stock in warehouse
+      extraQuantity,        // Extra pieces for samples/merma
+      totalToProduce,       // Total to produce = totalQuantity - warehouseStock + extraQuantity
+      commitmentDate,
+      customerId,
       styleDescription,
       color,
-      fabricSupplier,
+      fabrics,
       styleCode,
       lineNo,
       runDate,
     } = req.body;
     
     // Validate required fields
-    if (!workOrderNo || !quantity || !customerName || !styleDescription) {
+    if (!workOrderNo || !totalToProduce || !customerId || !styleDescription) {
+      console.log("Missing fields:", { workOrderNo, totalToProduce, customerId, styleDescription });
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: workOrderNo, quantity, customerName, styleDescription",
+        error: "Missing required fields: workOrderNo, totalToProduce, customerId, styleDescription",
       });
     }
     
@@ -566,15 +575,33 @@ app.post("/api/work-orders", authenticateToken, requireRole(["engineer", "superv
       });
     }
     
+    // Get customer name from customer ID
+    const customerResult = await client.query(
+      "SELECT name FROM customers WHERE id = $1",
+      [customerId]
+    );
+    
+    const customerName = customerResult.rows.length > 0 ? customerResult.rows[0].name : null;
+    
+    // Convert fabrics array to PostgreSQL array format
+    const fabricsArray = fabrics && fabrics.length > 0 ? fabrics : [];
+    
+    // Store totalToProduce in the quantity column (this is what the customer needs to be produced)
     const result = await client.query(
       `
       INSERT INTO work_orders (
         work_order_no,
-        quantity,
+        quantity,                    -- This is the main quantity column (total to produce)
+        total_quantity,              -- Original customer order quantity
+        warehouse_stock,
+        extra_quantity,
+        total_to_produce,
+        commitment_date,
+        customer_id,
         customer_name,
         style_description,
         color,
-        fabric_supplier,
+        fabrics,
         style_code,
         line_no,
         run_date,
@@ -582,16 +609,22 @@ app.post("/api/work-orders", authenticateToken, requireRole(["engineer", "superv
         updated_at,
         status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), 'pending')
-      RETURNING id, work_order_no, quantity, customer_name, style_description, status, created_at
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW(), 'pending')
+      RETURNING id, work_order_no, quantity, style_description, status, created_at
       `,
       [
         workOrderNo,
-        parseFloat(quantity),
+        parseFloat(totalToProduce) || 0,        // quantity column gets totalToProduce
+        parseFloat(totalQuantity) || 0,          // total_quantity gets original order
+        parseFloat(warehouseStock) || 0,
+        parseFloat(extraQuantity) || 0,
+        parseFloat(totalToProduce),
+        commitmentDate || null,
+        parseInt(customerId),
         customerName,
         styleDescription,
         color || null,
-        fabricSupplier || null,
+        fabricsArray,
         styleCode || null,
         lineNo || null,
         runDate || null,
@@ -601,10 +634,17 @@ app.post("/api/work-orders", authenticateToken, requireRole(["engineer", "superv
     res.json({
       success: true,
       message: "Work order created successfully",
-      workOrder: result.rows[0],
+      workOrder: {
+        id: result.rows[0].id,
+        work_order_no: result.rows[0].work_order_no,
+        quantity: result.rows[0].quantity,  // This is the customer quantity
+        style_description: result.rows[0].style_description,
+        status: result.rows[0].status
+      },
     });
   } catch (err) {
     console.error("❌ Error creating work order:", err.message);
+    console.error("Stack:", err.stack);
     
     if (err.code === "23505") {
       return res.status(400).json({
@@ -618,12 +658,11 @@ app.post("/api/work-orders", authenticateToken, requireRole(["engineer", "superv
     client.release();
   }
 });
-
 /**
  * PUT /api/work-orders/:id
  * Update an existing work order
  */
-app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -631,16 +670,55 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
     const { id } = req.params;
     const {
       workOrderNo,
-      quantity,
-      customerName,
+      quantity,              // Changed from totalQuantity
+      totalQuantity,         // Keep for compatibility
+      warehouseStock,
+      extraQuantity,
+      totalToProduce,
+      commitmentDate,
+      customerId,
       styleDescription,
       color,
-      fabricSupplier,
+      fabrics,
       styleCode,
       lineNo,
       runDate,
       status,
     } = req.body;
+    
+    console.log(`📝 Updating work order ${id} with data:`, { workOrderNo, totalToProduce });
+    
+    // Use either quantity or totalQuantity for the main quantity field
+    const mainQuantity = quantity !== undefined ? quantity : totalQuantity;
+    
+    // First, get the current work order to check if it exists
+    const currentWorkOrder = await client.query(
+      "SELECT id, work_order_no FROM work_orders WHERE id = $1",
+      [id]
+    );
+    
+    if (currentWorkOrder.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found",
+      });
+    }
+    
+    // Check if work order number already exists (excluding current work order)
+    if (workOrderNo && workOrderNo !== currentWorkOrder.rows[0].work_order_no) {
+      const existingCheck = await client.query(
+        "SELECT id FROM work_orders WHERE work_order_no = $1 AND id != $2",
+        [workOrderNo, id]
+      );
+      
+      if (existingCheck.rows.length > 0) {
+        console.log(`❌ Duplicate work order number: ${workOrderNo}`);
+        return res.status(400).json({
+          success: false,
+          error: `Work order number "${workOrderNo}" already exists`,
+        });
+      }
+    }
     
     // Build update query dynamically
     const updates = [];
@@ -652,14 +730,49 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
       values.push(workOrderNo);
     }
     
-    if (quantity !== undefined) {
-      updates.push(`quantity = $${paramIndex++}`);
-      values.push(parseFloat(quantity));
+    if (mainQuantity !== undefined) {
+      updates.push(`quantity = $${paramIndex++}`);  // Main quantity column
+      values.push(parseFloat(mainQuantity) || 0);
     }
     
-    if (customerName !== undefined) {
-      updates.push(`customer_name = $${paramIndex++}`);
-      values.push(customerName);
+    if (totalQuantity !== undefined) {
+      updates.push(`total_quantity = $${paramIndex++}`);
+      values.push(parseFloat(totalQuantity) || 0);
+    }
+    
+    if (warehouseStock !== undefined) {
+      updates.push(`warehouse_stock = $${paramIndex++}`);
+      values.push(parseFloat(warehouseStock) || 0);
+    }
+    
+    if (extraQuantity !== undefined) {
+      updates.push(`extra_quantity = $${paramIndex++}`);
+      values.push(parseFloat(extraQuantity) || 0);
+    }
+    
+    if (totalToProduce !== undefined) {
+      updates.push(`total_to_produce = $${paramIndex++}`);
+      values.push(parseFloat(totalToProduce) || 0);
+    }
+    
+    if (commitmentDate !== undefined) {
+      updates.push(`commitment_date = $${paramIndex++}`);
+      values.push(commitmentDate || null);
+    }
+    
+    if (customerId !== undefined && customerId) {
+      updates.push(`customer_id = $${paramIndex++}`);
+      values.push(parseInt(customerId));
+      
+      // Also update customer_name
+      const customerResult = await client.query(
+        "SELECT name FROM customers WHERE id = $1",
+        [parseInt(customerId)]
+      );
+      if (customerResult.rows.length > 0) {
+        updates.push(`customer_name = $${paramIndex++}`);
+        values.push(customerResult.rows[0].name);
+      }
     }
     
     if (styleDescription !== undefined) {
@@ -672,9 +785,9 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
       values.push(color || null);
     }
     
-    if (fabricSupplier !== undefined) {
-      updates.push(`fabric_supplier = $${paramIndex++}`);
-      values.push(fabricSupplier || null);
+    if (fabrics !== undefined) {
+      updates.push(`fabrics = $${paramIndex++}`);
+      values.push(fabrics);
     }
     
     if (styleCode !== undefined) {
@@ -693,11 +806,11 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
     }
     
     if (status !== undefined) {
-      const validStatuses = ['pending', 'assigned', 'in_progress', 'completed'];
+      const validStatuses = ['pending', 'assigned', 'in_progress', 'completed', 'cancelled'];
       if (!validStatuses.includes(status)) {
         return res.status(400).json({
           success: false,
-          error: "Invalid status",
+          error: "Invalid status. Must be one of: " + validStatuses.join(', '),
         });
       }
       updates.push(`status = $${paramIndex++}`);
@@ -719,9 +832,10 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
       UPDATE work_orders 
       SET ${updates.join(", ")}
       WHERE id = $${paramIndex}
-      RETURNING id, work_order_no, quantity, customer_name, style_description, status, updated_at
+      RETURNING id, work_order_no, quantity, style_description, status, updated_at
     `;
     
+    console.log("📝 Executing update query");
     const result = await client.query(query, values);
     
     if (result.rows.length === 0) {
@@ -731,6 +845,8 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
       });
     }
     
+    console.log(`✅ Work order ${id} updated successfully`);
+    
     res.json({
       success: true,
       message: "Work order updated successfully",
@@ -738,6 +854,15 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
     });
   } catch (err) {
     console.error("❌ Error updating work order:", err.message);
+    console.error("Stack:", err.stack);
+    
+    if (err.code === "23505") {
+      return res.status(400).json({
+        success: false,
+        error: "Work order number already exists",
+      });
+    }
+    
     res.status(500).json({ success: false, error: err.message });
   } finally {
     client.release();
@@ -748,7 +873,7 @@ app.put("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "sup
  * PUT /api/work-orders/:id/status
  * Update work order status
  */
-app.put("/api/work-orders/:id/status", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.put("/api/work-orders/:id/status", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -795,7 +920,7 @@ app.put("/api/work-orders/:id/status", authenticateToken, requireRole(["engineer
  * DELETE /api/work-orders/:id
  * Soft delete a work order
  */
-app.delete("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.delete("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -803,19 +928,55 @@ app.delete("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "
     
     const { id } = req.params;
     
+    console.log(`🗑️ Attempting to delete work order: ${id}`);
+    
+    // First, check if work order exists and get its data
+    const workOrderCheck = await client.query(
+      `SELECT id, work_order_no, status, total_to_produce, quantity 
+       FROM work_orders 
+       WHERE id = $1`,
+      [id]
+    );
+    
+    if (workOrderCheck.rows.length === 0) {
+      console.log(`❌ Work order ${id} not found`);
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        error: "Work order not found",
+      });
+    }
+    
+    const workOrder = workOrderCheck.rows[0];
+    console.log(`📋 Work order found: ${workOrder.work_order_no}, status: ${workOrder.status}`);
+    
+    // Check if work order is already completed
+    if (workOrder.status === 'completed') {
+      console.log(`⚠️ Cannot delete completed work order: ${workOrder.work_order_no}`);
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        error: "Cannot delete a completed work order",
+      });
+    }
+    
     // Check if work order has active assignments
     const assignmentsCheck = await client.query(
       `
-      SELECT id FROM line_assignments 
+      SELECT id, line_no, status, assigned_quantity 
+      FROM line_assignments 
       WHERE work_order_id = $1 AND status IN ('planned', 'released', 'in_progress')
       `,
       [id]
     );
     
     if (assignmentsCheck.rows.length > 0) {
+      console.log(`⚠️ Work order has ${assignmentsCheck.rows.length} active assignments`);
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
-        error: "Cannot delete work order with active assignments. Cancel assignments first.",
+        error: `Cannot delete work order with ${assignmentsCheck.rows.length} active assignments. Cancel assignments first.`,
+        activeAssignments: assignmentsCheck.rows
       });
     }
     
@@ -825,33 +986,42 @@ app.delete("/api/work-orders/:id", authenticateToken, requireRole(["engineer", "
       UPDATE work_orders
       SET status = 'cancelled', updated_at = NOW()
       WHERE id = $1 AND status != 'completed'
-      RETURNING id, work_order_no
+      RETURNING id, work_order_no, status
       `,
       [id]
     );
     
     if (result.rows.length === 0) {
+      console.log(`❌ Failed to cancel work order ${id}`);
+      await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
         error: "Work order not found or already completed",
       });
     }
     
+    console.log(`✅ Work order ${result.rows[0].work_order_no} cancelled successfully`);
+    
     await client.query("COMMIT");
     
     res.json({
       success: true,
-      message: "Work order cancelled successfully",
+      message: `Work order ${result.rows[0].work_order_no} cancelled successfully`,
+      workOrder: result.rows[0]
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error cancelling work order:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Stack:", err.stack);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message,
+      details: err.stack
+    });
   } finally {
     client.release();
   }
 });
-
 // Add this to planning-server.js if not already present
 app.get("/api/line-runs", authenticateToken, requireRole(planningRoles), async (req, res) => {
   const client = await pool.connect();
@@ -1039,14 +1209,17 @@ app.get("/api/line-assignments/:id", authenticateToken, requireRole(planningRole
 
 // Helper function to update work order status based on assignments
 const updateWorkOrderStatus = async (client, workOrderId) => {
+  // Get work order details - use total_to_produce or quantity
   const workOrderResult = await client.query(
-    `SELECT quantity FROM work_orders WHERE id = $1`,
+    `SELECT id, total_to_produce, quantity FROM work_orders WHERE id = $1`,
     [workOrderId]
   );
   
   if (workOrderResult.rows.length === 0) return;
   
-  const totalQuantity = parseFloat(workOrderResult.rows[0].quantity);
+  // Use total_to_produce if available, otherwise use quantity
+  const totalQuantity = parseFloat(workOrderResult.rows[0].total_to_produce) || 
+                        parseFloat(workOrderResult.rows[0].quantity) || 0;
   
   const assignmentsResult = await client.query(
     `SELECT COALESCE(SUM(assigned_quantity), 0) as total_assigned
@@ -1058,7 +1231,7 @@ const updateWorkOrderStatus = async (client, workOrderId) => {
   const totalAssigned = parseFloat(assignmentsResult.rows[0].total_assigned);
   
   let newStatus = 'pending';
-  if (totalAssigned >= totalQuantity) {
+  if (totalAssigned >= totalQuantity && totalQuantity > 0) {
     newStatus = 'completed';
   } else if (totalAssigned > 0) {
     newStatus = 'assigned';
@@ -1076,7 +1249,7 @@ const updateWorkOrderStatus = async (client, workOrderId) => {
  * POST /api/line-assignments
  * Create a new line assignment
  */
-app.post("/api/line-assignments", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.post("/api/line-assignments", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -1278,7 +1451,7 @@ app.post("/api/line-assignments", authenticateToken, requireRole(["engineer", "s
  * PUT /api/line-assignments/:id
  * Update an existing line assignment
  */
-app.put("/api/line-assignments/:id", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.put("/api/line-assignments/:id", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -1430,7 +1603,7 @@ app.put("/api/line-assignments/:id", authenticateToken, requireRole(["engineer",
  * PUT /api/line-assignments/:id/status
  * Update assignment status
  */
-app.put("/api/line-assignments/:id/status", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.put("/api/line-assignments/:id/status", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -1495,7 +1668,7 @@ app.put("/api/line-assignments/:id/status", authenticateToken, requireRole(["eng
  * DELETE /api/line-assignments/:id
  * Cancel/delete an assignment
  */
-app.delete("/api/line-assignments/:id", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.delete("/api/line-assignments/:id", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -1587,14 +1760,16 @@ app.get("/api/planning/available-lines", authenticateToken, requireRole(planning
       [date]
     );
     
-    // Get existing assignments for the date
+    // Get ONLY active assignments (planned, released, in_progress) for the date
+    // Do NOT include completed or cancelled assignments
     const assignments = await client.query(
       `
       SELECT 
         line_no,
         COALESCE(SUM(assigned_quantity), 0) as assigned_quantity
       FROM line_assignments
-      WHERE assigned_date = $1 AND status IN ('planned', 'released', 'in_progress')
+      WHERE assigned_date = $1 
+        AND status IN ('planned', 'released', 'in_progress')
       GROUP BY line_no
       `,
       [date]
@@ -1606,16 +1781,23 @@ app.get("/api/planning/available-lines", authenticateToken, requireRole(planning
     });
     
     // Calculate available capacity for each line
+    // Available = Full Capacity - Already Assigned (active only)
     const availableLines = lineRuns.rows.map(run => {
       const assigned = assignedMap[run.line_no] || 0;
-      const available = run.target_pcs - assigned;
+      const fullCapacity = run.target_pcs;
+      const available = fullCapacity - assigned;
+      
+      console.log(`Line ${run.line_no}: Full=${fullCapacity}, Assigned=${assigned}, Available=${available}`);
       
       return {
         ...run,
         assigned_quantity: assigned,
         available_capacity: Math.max(0, available),
         is_available: available > 0,
-        utilization_percentage: run.target_pcs > 0 ? (assigned / run.target_pcs) * 100 : 0,
+        utilization_percentage: fullCapacity > 0 ? (assigned / fullCapacity) * 100 : 0,
+        // Add these for better debugging
+        full_capacity: fullCapacity,
+        has_assignments: assigned > 0
       };
     });
     
@@ -1631,7 +1813,6 @@ app.get("/api/planning/available-lines", authenticateToken, requireRole(planning
     client.release();
   }
 });
-
 /**
  * GET /api/planning/line-capacity
  * Get line capacity for a date range
@@ -1796,7 +1977,7 @@ app.get("/api/planning/work-order-progress/:id", authenticateToken, requireRole(
  * POST /api/planning/bulk-assign
  * Bulk assign multiple work orders to lines
  */
-app.post("/api/planning/bulk-assign", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.post("/api/planning/bulk-assign", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
@@ -2119,7 +2300,7 @@ app.get("/api/planning/statistics", authenticateToken, requireRole(planningRoles
  * GET /api/planning/recalculate-status
  * Recalculate all work order statuses based on assignments
  */
-app.post("/api/planning/recalculate-status", authenticateToken, requireRole(["engineer", "supervisor"]), async (req, res) => {
+app.post("/api/planning/recalculate-status", authenticateToken, requireRole(["engineer", "supervisor", "planner"]), async (req, res) => {
   const client = await pool.connect();
   try {
     await setSchema(client);
