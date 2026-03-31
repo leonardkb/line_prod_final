@@ -14,75 +14,181 @@ function toYMD(d) {
 }
 
 // Helper function to calculate finished garments from packing operations
+// Replace the calculateFinishedGarments function with this improved version
 const calculateFinishedGarments = (runData) => {
   if (!runData) return 0;
   let total = 0;
   const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
   
-  for (const block of runData.operations || []) {
-    for (const op of block.operations || []) {
-      const opName = (op.operation_name || '').toLowerCase();
-      if (packingKeywords.some(keyword => opName.includes(keyword))) {
-        const sewedData = op.sewed_data || {};
-        for (const qty of Object.values(sewedData)) {
-          total += Number(qty) || 0;
+  try {
+    // Check different possible data structures
+    if (runData.operations && Array.isArray(runData.operations)) {
+      for (const block of runData.operations) {
+        // Check if block has operations array
+        if (block.operations && Array.isArray(block.operations)) {
+          for (const op of block.operations) {
+            const opName = (op.operation_name || '').toLowerCase();
+            const isPackingOp = packingKeywords.some(keyword => opName.includes(keyword));
+            
+            if (isPackingOp) {
+              // Check different places where production data might be stored
+              let sewedData = null;
+              
+              if (op.sewed_data) {
+                sewedData = op.sewed_data;
+              } else if (op.produced_quantity) {
+                sewedData = op.produced_quantity;
+              } else if (op.production) {
+                sewedData = op.production;
+              } else if (op.quantity) {
+                sewedData = op.quantity;
+              }
+              
+              // Sum all values in the sewed_data object
+              if (sewedData && typeof sewedData === 'object' && !Array.isArray(sewedData)) {
+                const values = Object.values(sewedData);
+                for (const qty of values) {
+                  if (qty !== null && qty !== undefined && qty !== '') {
+                    const num = Number(qty);
+                    if (!isNaN(num) && isFinite(num) && num > 0) {
+                      total += num;
+                    }
+                  }
+                }
+              } else if (typeof sewedData === 'number' && sewedData > 0) {
+                total += sewedData;
+              } else if (typeof sewedData === 'string' && sewedData !== '') {
+                const num = Number(sewedData);
+                if (!isNaN(num) && isFinite(num) && num > 0) {
+                  total += num;
+                }
+              }
+            }
+          }
         }
       }
     }
+    
+    // If no packing operations found, try to get from run level
+    if (total === 0 && runData.run) {
+      if (runData.run.total_produced) {
+        total = Number(runData.run.total_produced) || 0;
+      } else if (runData.run.finished_garments) {
+        total = Number(runData.run.finished_garments) || 0;
+      }
+    }
+    
+    console.log(`calculateFinishedGarments returned: ${total} for run:`, runData.run?.id);
+    return total;
+    
+  } catch (err) {
+    console.error('Error calculating finished garments:', err);
+    return 0;
   }
-  return total;
 };
 
-// Helper function to calculate actual achieved daily efficiency based on SAM
-// Uses operators_count from line_runs (planned operators) not the actual operators in run_operators
+// Also improve the calculateActualDailyEfficiency function to handle NaN better
 const calculateActualDailyEfficiency = (runData) => {
   if (!runData) return 0;
   
   const sewed = calculateFinishedGarments(runData);
-  // Use operators_count from line_runs instead of counting actual operators
-  const operatorsCount = runData.run?.operators_count || 0;
-  const workingHours = runData.run?.working_hours || 0;
-  const sam = runData.run?.sam_minutes || 0;
   
-  if (operatorsCount === 0 || workingHours === 0 || sam === 0) return 0;
+  // Check if sewed is NaN or invalid
+  if (isNaN(sewed) || !isFinite(sewed)) {
+    console.warn('calculateFinishedGarments returned invalid value for run:', runData.run?.id);
+    return 0;
+  }
   
-  // Total available minutes = operators * working hours * 60
+  const operatorsCount = Number(runData.run?.operators_count) || 0;
+  const workingHours = Number(runData.run?.working_hours) || 0;
+  const sam = Number(runData.run?.sam_minutes) || 0;
+  
+  console.log(`Line ${runData.run?.line_no}: sewed=${sewed}, ops=${operatorsCount}, hours=${workingHours}, sam=${sam}`);
+  
+  if (operatorsCount === 0 || workingHours === 0 || sam === 0) {
+    console.warn('Missing data for efficiency calculation');
+    return 0;
+  }
+  
   const availableMinutes = operatorsCount * workingHours * 60;
-  
-  // Total SAM produced = sewed pieces * SAM per piece
   const totalSAMOutput = sewed * sam;
-  
-  // Actual efficiency = (SAM produced / available minutes) * 100
   const actualEfficiency = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
   
+  console.log(`Calculated efficiency: ${actualEfficiency}%`);
   return Math.round(actualEfficiency * 100) / 100;
 };
 
-// Helper function to calculate total SAM output and total available minutes across all lines
-const calculateGlobalEfficiencyMetrics = (styleRuns) => {
-  let totalSAMOutput = 0;
-  let totalAvailableMinutes = 0;
+// Add this debug function to check the API response structure
+const debugRunDataStructure = (runData) => {
+  console.log('=== Debug Run Data Structure ===');
+  console.log('Full runData:', runData);
+  console.log('runData.run:', runData.run);
+  console.log('runData.operations:', runData.operations);
+  if (runData.operations && runData.operations.length > 0) {
+    console.log('First operation block:', runData.operations[0]);
+    if (runData.operations[0].operations && runData.operations[0].operations.length > 0) {
+      console.log('First operation:', runData.operations[0].operations[0]);
+      console.log('Operation name:', runData.operations[0].operations[0].operation_name);
+      console.log('Sewed data:', runData.operations[0].operations[0].sewed_data);
+    }
+  }
+  console.log('=============================');
+};
+
+// In the fetchAllRunDetails useEffect, add the debug call temporarily
+// Inside the loop where you fetch run details, add:
+// debugRunDataStructure(detailRes.data);
+
+
+// Also update the calculateLineTotalFinished function to ensure proper number handling
+const calculateLineTotalFinished = (runs) => {
+  if (!runs || runs.length === 0) return 0;
+  const total = runs.reduce((sum, run) => {
+    let val = run.finishedGarments || 0;
+    if (isNaN(val) || !isFinite(val)) val = 0;
+    console.log(`Run ${run.style}: finishedGarments = ${val}`);
+    return sum + val;
+  }, 0);
+  console.log(`Line total finished: ${total}`);
+  return total;
+};
+
+// Update the calculateLineTotalTarget function to handle numbers properly
+const calculateLineTotalTarget = (runs) => {
+  if (!runs || runs.length === 0) return 0;
   
-  for (const run of styleRuns) {
-    const sewed = run.sewed;
-    const sam = run.sam;
-    const operatorsCount = run.operatorsCount;
-    const workingHours = run.workingHours;
+  let totalTarget = 0;
+  
+  for (const run of runs) {
+    if (!run.hasProductionData) continue;
     
-    totalSAMOutput += sewed * sam;
-    totalAvailableMinutes += operatorsCount * workingHours * 60;
+    // Use the appropriate target based on production status
+    if (productionEnded) {
+      const target = Number(run.targetPcs) || 0;
+      if (target > 0 && !isNaN(target) && isFinite(target)) {
+        totalTarget += target;
+      }
+    } else {
+      // During production, use realtime target if available
+      let target = 0;
+      if (run.realtimeTarget > 0 && !isNaN(run.realtimeTarget) && isFinite(run.realtimeTarget)) {
+        target = Number(run.realtimeTarget);
+      } else {
+        target = Number(run.targetPcs) || 0;
+      }
+      
+      if (target > 0 && !isNaN(target) && isFinite(target)) {
+        totalTarget += target;
+      }
+    }
   }
   
-  const globalEfficiency = totalAvailableMinutes > 0 
-    ? (totalSAMOutput / totalAvailableMinutes) * 100 
-    : 0;
-  
-  return {
-    totalSAMOutput,
-    totalAvailableMinutes,
-    globalEfficiency: Math.round(globalEfficiency * 100) / 100
-  };
+  console.log(`Line total target: ${totalTarget}`);
+  return totalTarget;
 };
+
+// Helper function to calculate actual achieved daily efficiency based on SAM
+;
 
 // Helper function to check if production has ended for the day
 const isProductionEnded = (selectedDate) => {
@@ -94,14 +200,15 @@ const isProductionEnded = (selectedDate) => {
   return now >= PRODUCTION_END;
 };
 
-// Helper function to calculate real-time efficiency (only if production hasn't ended)
+// Helper function to calculate real-time efficiency
+// Helper function to calculate real-time efficiency
 const calculateRealtimeEfficiency = (runData, selectedDate) => {
+  if (!runData || !selectedDate) return null;
+  
   // If production has ended, return null to indicate we should show daily efficiency instead
   if (isProductionEnded(selectedDate)) {
     return null;
   }
-  
-  if (!runData || !selectedDate) return 0;
   
   const now = new Date();
   const todayStr = selectedDate;
@@ -125,6 +232,11 @@ const calculateRealtimeEfficiency = (runData, selectedDate) => {
   // If production hasn't started yet
   if (now < PRODUCTION_START) {
     return 0;
+  }
+  
+  // If production has ended for the day
+  if (now >= PRODUCTION_END) {
+    return null;
   }
   
   // Calculate elapsed time in minutes
@@ -153,10 +265,10 @@ const calculateRealtimeEfficiency = (runData, selectedDate) => {
   return Math.round(realtimeEfficiency * 100) / 100;
 };
 
+// Helper function to calculate real-time target
 const computeRealtimeTarget = (runData, selectedDate) => {
   if (!runData || !selectedDate) return 0;
   
-  // If production has ended, return the full target
   if (isProductionEnded(selectedDate)) {
     return runData.run?.target_pcs || 0;
   }
@@ -179,8 +291,13 @@ const computeRealtimeTarget = (runData, selectedDate) => {
   
   const totalTarget = runData.run?.target_pcs || 0;
   
-  if (now < PRODUCTION_START) return 0;
-  if (now >= PRODUCTION_END) return totalTarget;
+  if (now < PRODUCTION_START) {
+    return 0;
+  }
+  
+  if (now >= PRODUCTION_END) {
+    return totalTarget;
+  }
   
   const elapsedMilliseconds = now - PRODUCTION_START;
   const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
@@ -194,7 +311,30 @@ const computeRealtimeTarget = (runData, selectedDate) => {
   return 0;
 };
 
-// Updated getLineStatus based on actual efficiency
+// Helper function to get elapsed minutes since production start
+const getElapsedMinutes = (selectedDate) => {
+  if (!selectedDate) return 0;
+  
+  const now = new Date();
+  const todayStr = selectedDate;
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  
+  // Get slots end time from run data (or use default 17:36)
+  // This function should be called with runData context
+  return 0; // Will be replaced with proper implementation
+};
+
+// Helper function to get total production minutes in a day
+const getTotalProductionMinutes = (selectedDate) => {
+  if (!selectedDate) return 0;
+  
+  const todayStr = selectedDate;
+  const PRODUCTION_START = new Date(`${todayStr}T08:00:00`);
+  const PRODUCTION_END = new Date(`${todayStr}T17:36:00`);
+  
+  return (PRODUCTION_END - PRODUCTION_START) / (1000 * 60);
+};
+
 const getLineStatus = (efficiency) => {
   if (efficiency === 0) return { color: 'gray', icon: '⏸️', text: 'Sin Datos' };
   if (efficiency < 40) return { color: 'red', icon: '🔴', text: 'Crítico' };
@@ -205,7 +345,6 @@ const getLineStatus = (efficiency) => {
   return { color: 'emerald', icon: '👑', text: 'Excelente' };
 };
 
-// Color functions with the requested scheme
 const getEfficiencyColor = (eff) => {
   if (eff >= 90) return 'text-green-800';
   if (eff >= 80) return 'text-green-600';
@@ -256,7 +395,7 @@ export default function SkyrinaDashboard() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [summary, setSummary] = useState(null);
   const [lineData, setLineData] = useState([]);
-  const [styleRunData, setStyleRunData] = useState([]);
+  const [runDataMap, setRunDataMap] = useState({});
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -267,7 +406,6 @@ export default function SkyrinaDashboard() {
   const [hoveredCard, setHoveredCard] = useState(null);
   const [productionEnded, setProductionEnded] = useState(false);
   
-  // Auto-refresh state
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [countdown, setCountdown] = useState(300);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
@@ -302,7 +440,6 @@ export default function SkyrinaDashboard() {
       });
   }, []);
 
-  // Check if production has ended
   useEffect(() => {
     const checkProductionEnded = () => {
       const ended = isProductionEnded(date);
@@ -314,7 +451,6 @@ export default function SkyrinaDashboard() {
     return () => clearInterval(interval);
   }, [date]);
 
-  // Auto-refresh logic
   useEffect(() => {
     let timer;
     if (autoRefresh && date) {
@@ -331,103 +467,141 @@ export default function SkyrinaDashboard() {
     return () => clearInterval(timer);
   }, [autoRefresh, date]);
 
-  // Fetch all style runs for each line
-  useEffect(() => {
-    const fetchAllStyleRuns = async () => {
-      if (!lineData.length || !date) return;
-      
-      const token = localStorage.getItem('token');
-      const headers = { Authorization: `Bearer ${token}` };
-      const styleRunsMap = new Map();
-      let totalRealtimeTarget = 0;
-      let totalWeightedEff = 0;
-      let totalTargets = 0;
-      
-      // For weighted efficiency calculation
-      let totalSAMOutputSum = 0;
-      let totalAvailableMinutesSum = 0;
-      
-      for (const line of lineData) {
-        try {
-          const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
-          if (!runsRes.data.success) continue;
-          
-          const runsForDate = runsRes.data.runs.filter(r => toYMD(r.run_date) === date);
-          
-          for (const run of runsForDate) {
-            const styleKey = `${line.lineNo}-${run.style}`;
-            
-            if (styleRunsMap.has(styleKey)) continue;
-            
-            const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
-            if (!detailRes.data.success) continue;
-            
-            const runData = detailRes.data;
-            const realtimeTarget = computeRealtimeTarget(runData, date);
-            const finishedGarments = calculateFinishedGarments(runData);
-            
-            // Calculate actual achieved daily efficiency based on SAM using operators_count from line_runs
-            const actualDailyEff = calculateActualDailyEfficiency(runData);
-            
-            // Calculate realtime efficiency (returns null if production ended)
-            const realtimeEff = calculateRealtimeEfficiency(runData, date);
-            
-            const operatorsCount = runData.run?.operators_count || 0;
-            const workingHours = runData.run?.working_hours || 0;
-            const sam = runData.run?.sam_minutes || 0;
-            
-            // Accumulate for weighted global efficiency
-            totalSAMOutputSum += finishedGarments * sam;
-            totalAvailableMinutesSum += operatorsCount * workingHours * 60;
-            
-            styleRunsMap.set(styleKey, {
-              lineNo: line.lineNo,
-              runId: run.id,
-              style: run.style,
-              targetPcs: run.target_pcs,
-              sewed: finishedGarments,
-              realtimeTarget,
-              realtimeEfficiency: realtimeEff,
-              dailyEfficiency: actualDailyEff,
-              operatorsCount: operatorsCount,
-              workingHours: workingHours,
-              sam: sam,
-              runData
-            });
-            
-            totalRealtimeTarget += realtimeTarget;
-            
-            if (realtimeTarget > 0 && realtimeEff !== null) {
-              totalWeightedEff += realtimeEff * realtimeTarget;
-              totalTargets += realtimeTarget;
-            }
-          }
-        } catch (err) {
-          console.error(`Error fetching details for line ${line.lineNo}:`, err);
+  // Fetch all run details for each line - grouped by line
+// Fetch all run details for each line - grouped by line
+useEffect(() => {
+  const fetchAllRunDetails = async () => {
+    if (!lineData.length || !date) return;
+    
+    const token = localStorage.getItem('token');
+    const headers = { Authorization: `Bearer ${token}` };
+    
+    const newRunDataMap = {};
+    const lineTargets = {};
+    
+    // IMPORTANT: Declare these outside the line loop to accumulate across ALL lines
+    let totalWeightedRealtimeEff = 0;
+    let totalWeightedRealtimeTarget = 0;
+    
+    for (const line of lineData) {
+      try {
+        const runsRes = await axios.get(`${API_BASE}/api/line-runs/${line.lineNo}`, { headers });
+        if (!runsRes.data.success) continue;
+        
+        const runsForDate = runsRes.data.runs.filter(r => toYMD(r.run_date) === date);
+        
+        if (runsForDate.length === 0) {
+          newRunDataMap[line.lineNo] = [];
+          lineTargets[line.lineNo] = 0;
+          continue;
         }
+        
+        const lineRuns = [];
+        
+        for (const run of runsForDate) {
+          const detailRes = await axios.get(`${API_BASE}/api/get-run-data/${run.id}`, { headers });
+          if (!detailRes.data.success) continue;
+          
+          const runData = detailRes.data;
+          const finishedGarments = calculateFinishedGarments(runData);
+          
+          // Get real-time values using the same functions as Dashboard.jsx
+          const rtEff = calculateRealtimeEfficiency(runData, date);
+          const rtTarget = computeRealtimeTarget(runData, date);
+          const dailyEff = calculateActualDailyEfficiency(runData);
+          
+          const operatorsCount = runData.run?.operators_count || 0;
+          const workingHours = runData.run?.working_hours || 0;
+          const sam = runData.run?.sam_minutes || 0;
+          
+          // Ensure values are valid numbers
+          const safeFinishedGarments = (isNaN(finishedGarments) || !isFinite(finishedGarments)) ? 0 : finishedGarments;
+          const safeDailyEff = (isNaN(dailyEff) || !isFinite(dailyEff)) ? 0 : dailyEff;
+          
+          // Handle realtime efficiency (can be null)
+          let safeRealtimeEff = 0;
+          if (rtEff !== null && !isNaN(rtEff) && isFinite(rtEff)) {
+            safeRealtimeEff = rtEff;
+          }
+          
+          const hasProductionData = safeFinishedGarments > 0 || (runData.operations && runData.operations.length > 0);
+          
+          // EXACTLY MATCH Dashboard.jsx condition
+          // Dashboard.jsx uses: if (rtTarget > 0 && rtEff !== null)
+          if (rtTarget > 0 && rtEff !== null) {
+            totalWeightedRealtimeEff += rtEff * rtTarget;
+            totalWeightedRealtimeTarget += rtTarget;
+            
+            console.log(`Adding to global: line ${line.lineNo}, style ${run.style}, eff=${rtEff}, target=${rtTarget}, weighted=${rtEff * rtTarget}`);
+          }
+          
+          lineRuns.push({
+            runId: run.id,
+            style: run.style,
+            styleGroupId: runData.run?.style_group_id,
+            styleGroupName: runData.run?.style_group_name,
+            targetPcs: run.target_pcs,
+            finishedGarments: safeFinishedGarments,
+            realtimeTarget: rtTarget,
+            realtimeEff: safeRealtimeEff,
+            dailyEff: safeDailyEff,
+            operatorsCount,
+            workingHours,
+            sam,
+            runData,
+            hasProductionData
+          });
+        }
+        
+        if (lineRuns.length > 0) {
+          newRunDataMap[line.lineNo] = lineRuns;
+          
+          // Calculate per-line real-time target
+          if (lineRuns.length > 0) {
+            const firstRun = lineRuns[0];
+            const lineRealtimeTarget = computeRealtimeTarget(firstRun.runData, date);
+            lineTargets[line.lineNo] = lineRealtimeTarget;
+          } else {
+            lineTargets[line.lineNo] = 0;
+          }
+        } else {
+          lineTargets[line.lineNo] = 0;
+        }
+        
+      } catch (err) {
+        console.error(`Error fetching details for line ${line.lineNo}:`, err);
+        newRunDataMap[line.lineNo] = [];
+        lineTargets[line.lineNo] = 0;
       }
-      
-      const globalEff = totalTargets > 0 ? totalWeightedEff / totalTargets : 0;
-      setGlobalRealtimeEfficiency(Math.round(globalEff * 100) / 100);
-      
-      // Calculate weighted global daily efficiency (not average of averages)
-      const weightedGlobalDaily = totalAvailableMinutesSum > 0 
-        ? (totalSAMOutputSum / totalAvailableMinutesSum) * 100 
-        : 0;
-      setGlobalDailyEfficiency(Math.round(weightedGlobalDaily * 100) / 100);
-      
-      const uniqueStyleRuns = Array.from(styleRunsMap.values());
-      uniqueStyleRuns.sort((a, b) => b.dailyEfficiency - a.dailyEfficiency);
-      
-      setStyleRunData(uniqueStyleRuns);
-      setGlobalRealtimeTarget(totalRealtimeTarget);
-    };
+    }
     
-    fetchAllStyleRuns();
+    setRunDataMap(newRunDataMap);
     
-    const interval = setInterval(fetchAllStyleRuns, 60000);
-    return () => clearInterval(interval);
-  }, [lineData, date]);
+    // Sum per-line targets for global real-time target
+    const targetSum = Object.values(lineTargets).reduce((a, b) => a + b, 0);
+    setGlobalRealtimeTarget(targetSum);
+    
+    console.log(`Global totals - Weighted Eff Sum: ${totalWeightedRealtimeEff}, Weighted Target Sum: ${totalWeightedRealtimeTarget}`);
+    
+    // Calculate global real-time efficiency using weighted average (EXACTLY matches Dashboard.jsx)
+    let correctGlobalRealtimeEfficiency = 0;
+    if (!productionEnded && totalWeightedRealtimeTarget > 0) {
+      correctGlobalRealtimeEfficiency = totalWeightedRealtimeEff / totalWeightedRealtimeTarget;
+      console.log(`Calculated global RT efficiency: ${correctGlobalRealtimeEfficiency}%`);
+    }
+    setGlobalRealtimeEfficiency(Math.round(correctGlobalRealtimeEfficiency * 100) / 100);
+    
+    // IMPORTANT: Daily efficiency comes from server's summary endpoint
+    if (summary && summary.overallEfficiency !== undefined) {
+      setGlobalDailyEfficiency(summary.overallEfficiency);
+    }
+  };
+  
+  fetchAllRunDetails();
+  
+  const interval = setInterval(fetchAllRunDetails, 60000);
+  return () => clearInterval(interval);
+}, [lineData, date, productionEnded, summary]);
 
   const fetchDashboardData = async (selectedDate, isRefresh = false) => {
     if (!isRefresh) setLoading(true);
@@ -462,7 +636,7 @@ export default function SkyrinaDashboard() {
     const newDate = e.target.value;
     setDate(newDate);
     fetchDashboardData(newDate, false);
-    setStyleRunData([]);
+    setRunDataMap({});
     setCountdown(300);
   };
 
@@ -494,7 +668,9 @@ export default function SkyrinaDashboard() {
 
   const formatNumber = (value) => {
     if (value == null) return '0';
-    return Number(value).toLocaleString(undefined, {
+    const num = Number(value);
+    if (isNaN(num)) return '0';
+    return num.toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     });
@@ -502,11 +678,252 @@ export default function SkyrinaDashboard() {
 
   const formatDecimal = (value) => {
     if (value == null) return '0';
-    return Number(value).toLocaleString(undefined, {
+    const num = Number(value);
+    if (isNaN(num)) return '0';
+    return num.toLocaleString(undefined, {
       minimumFractionDigits: 1,
       maximumFractionDigits: 1
     });
   };
+
+  // Calculate weighted efficiency for a line with multiple styles
+  const calculateLineWeightedEfficiency = (runs, useRealtime = false) => {
+    if (!runs || runs.length === 0) return 0;
+    
+    let totalWeightedEff = 0;
+    let totalTarget = 0;
+    
+    for (const run of runs) {
+      if (!run.hasProductionData) continue;
+      
+      let eff, target;
+      
+      if (useRealtime && !productionEnded) {
+        // For realtime during production, only use if we have valid realtime data
+        if (run.realtimeEff !== null && run.realtimeEff > 0 && !isNaN(run.realtimeEff) && isFinite(run.realtimeEff)) {
+          eff = run.realtimeEff;
+          target = run.realtimeTarget;
+        } else {
+          // Skip this run for realtime calculation if no realtime data
+          continue;
+        }
+      } else {
+        // For daily (or when production ended), always use daily values
+        eff = run.dailyEff;
+        target = run.targetPcs;
+      }
+      
+      // Validate values
+      const safeEff = (isNaN(eff) || !isFinite(eff)) ? 0 : eff;
+      const safeTarget = (isNaN(target) || !isFinite(target)) ? 0 : target;
+      
+      if (safeTarget > 0) {
+        totalWeightedEff += safeEff * safeTarget;
+        totalTarget += safeTarget;
+      }
+    }
+    
+    return totalTarget > 0 ? totalWeightedEff / totalTarget : 0;
+  };
+
+  // Calculate total finished garments for a line
+  const calculateLineTotalFinished = (runs) => {
+    if (!runs || runs.length === 0) return 0;
+    const total = runs.reduce((sum, run) => {
+      const val = run.finishedGarments || 0;
+      return sum + (isNaN(val) ? 0 : val);
+    }, 0);
+    return total;
+  };
+
+  // Calculate total target for a line (daily or realtime based on production status)
+  const calculateLineTotalTarget = (runs) => {
+    if (!runs || runs.length === 0) return 0;
+    
+    let totalTarget = 0;
+    let hasValidTarget = false;
+    
+    for (const run of runs) {
+      if (!run.hasProductionData) continue;
+      
+      // If production has ended, always use daily target
+      if (productionEnded) {
+        if (run.targetPcs > 0 && !isNaN(run.targetPcs) && isFinite(run.targetPcs)) {
+          totalTarget += run.targetPcs;
+          hasValidTarget = true;
+        }
+      } 
+      // During production, use realtime target if available
+      else {
+        if (run.realtimeTarget > 0 && !isNaN(run.realtimeTarget) && isFinite(run.realtimeTarget)) {
+          totalTarget += run.realtimeTarget;
+          hasValidTarget = true;
+        } 
+        // Fall back to daily target if realtime target is 0
+        else if (run.targetPcs > 0 && !isNaN(run.targetPcs) && isFinite(run.targetPcs)) {
+          totalTarget += run.targetPcs;
+          hasValidTarget = true;
+        }
+      }
+    }
+    
+    return hasValidTarget ? totalTarget : 0;
+  };
+
+  // Prepare line data with calculated efficiency for sorting
+  // Replace the prepareSortedLines function with this corrected version
+const prepareSortedLines = () => {
+  const linesWithEfficiency = [];
+  
+  for (const [lineNo, runs] of Object.entries(runDataMap)) {
+    if (!runs || runs.length === 0) continue;
+    
+    // Filter runs that have actual production data
+    const validRuns = runs.filter(run => {
+      const hasProduction = run.finishedGarments > 0 || 
+                          (run.runData && run.runData.operations && run.runData.operations.length > 0);
+      return hasProduction;
+    });
+    
+    if (validRuns.length === 0) continue;
+    
+    // For daily efficiency: weight by available minutes (operators × hours × 60)
+    let totalSAMOutputDaily = 0;
+    let totalAvailableMinutesDaily = 0;
+    
+    // For real-time efficiency: weight by target pieces
+    let totalWeightedRealtimeEff = 0;
+    let totalRealtimeTargetForWeighting = 0;
+    
+    let totalFinishedGarments = 0;
+    let totalDailyTarget = 0;
+    let totalRealtimeTarget = 0;
+    
+    for (const run of validRuns) {
+      // Get values with proper defaults
+      const sewed = run.finishedGarments || 0;
+      const operators = run.operatorsCount || 0;
+      const hours = run.workingHours || 0;
+      const sam = run.sam || 0;
+      const targetPcs = run.targetPcs || 0;
+      const realtimeTarget = run.realtimeTarget || 0;
+      const realtimeEff = run.realtimeEff || 0;
+      
+      // Calculate daily efficiency contribution (using total SAM output)
+      if (operators > 0 && hours > 0 && sam > 0) {
+        const availableMinutes = operators * hours * 60;
+        const samOutput = sewed * sam;
+        
+        totalSAMOutputDaily += samOutput;
+        totalAvailableMinutesDaily += availableMinutes;
+      }
+      
+      // Accumulate totals for display
+      totalFinishedGarments += sewed;
+      totalDailyTarget += targetPcs;
+      
+      // For real-time, use target-based weighting if available
+      if (!productionEnded && realtimeEff > 0 && realtimeTarget > 0) {
+        totalWeightedRealtimeEff += realtimeEff * realtimeTarget;
+        totalRealtimeTargetForWeighting += realtimeTarget;
+        totalRealtimeTarget += realtimeTarget;
+      } else {
+        totalRealtimeTarget += targetPcs; // Fallback to daily target
+      }
+    }
+    
+    // Calculate daily efficiency (weighted by available minutes)
+    const lineDailyEfficiency = totalAvailableMinutesDaily > 0 
+      ? (totalSAMOutputDaily / totalAvailableMinutesDaily) * 100 
+      : 0;
+    
+    // Calculate real-time efficiency (weighted by target pieces)
+    let lineRealtimeEfficiency = 0;
+    if (!productionEnded && totalRealtimeTargetForWeighting > 0) {
+      lineRealtimeEfficiency = totalWeightedRealtimeEff / totalRealtimeTargetForWeighting;
+    }
+    
+    // Determine which efficiency to display and which target to show
+    let displayEfficiency;
+    let displayLabel;
+    let displayTarget;
+    
+    if (productionEnded) {
+      // After production ends, always show daily efficiency and daily target
+      displayEfficiency = lineDailyEfficiency;
+      displayLabel = 'Final';
+      displayTarget = totalDailyTarget;
+    } else {
+      // During production, check if we have valid real-time data
+      if (lineRealtimeEfficiency > 0 && totalRealtimeTargetForWeighting > 0) {
+        // Use real-time efficiency and target
+        displayEfficiency = lineRealtimeEfficiency;
+        displayLabel = 'RT';
+        displayTarget = totalRealtimeTarget;
+      } else {
+        // Fallback to daily efficiency and target
+        displayEfficiency = lineDailyEfficiency;
+        displayLabel = 'Daily';
+        displayTarget = totalDailyTarget;
+      }
+    }
+    
+    // Debug log for Line 8 to verify calculations
+    if (lineNo === 8) {
+      console.log(`\n=== Line ${lineNo} Detailed Calculation ===`);
+      console.log(`Runs on line: ${validRuns.length}`);
+      console.log(`Total finished garments: ${totalFinishedGarments}`);
+      console.log(`Total daily target: ${totalDailyTarget}`);
+      console.log(`Total realtime target: ${totalRealtimeTarget}`);
+      console.log(`Total SAM Output (daily): ${totalSAMOutputDaily}`);
+      console.log(`Total Available Minutes (daily): ${totalAvailableMinutesDaily}`);
+      console.log(`Daily Efficiency: ${lineDailyEfficiency.toFixed(2)}%`);
+      console.log(`Realtime Efficiency: ${lineRealtimeEfficiency.toFixed(2)}%`);
+      console.log(`Display Efficiency: ${displayEfficiency.toFixed(2)}%`);
+      console.log(`Display Target: ${displayTarget}`);
+      console.log(`Production Ended: ${productionEnded}`);
+      console.log(`=====================================\n`);
+    }
+    
+    linesWithEfficiency.push({
+      lineNo,
+      runs: validRuns,
+      allRuns: runs,
+      efficiency: displayEfficiency,
+      displayLabel,
+      totalFinished: totalFinishedGarments,
+      totalTarget: displayTarget
+    });
+  }
+  
+  // Sort by efficiency (highest first)
+  linesWithEfficiency.sort((a, b) => b.efficiency - a.efficiency);
+  
+  return linesWithEfficiency;
+};
+
+// Also update the calculateLineTotalFinished and calculateLineTotalTarget functions to use the new totals
+// You can remove these old functions since we're calculating totals in prepareSortedLines now
+
+// Make sure the productionEnded check is working correctly
+const isProductionEnded = (selectedDate) => {
+  if (!selectedDate) return false;
+  const now = new Date();
+  const todayStr = selectedDate;
+  
+  // Check if selected date is today
+  const today = new Date().toISOString().slice(0, 10);
+  if (selectedDate !== today) {
+    // If viewing a past or future date, treat it as ended to show daily data
+    return true;
+  }
+  
+  const PRODUCTION_END = new Date(`${todayStr}T17:36:00`);
+  return now >= PRODUCTION_END;
+};
+
+// Update the line card rendering section to use the new item properties
+// In the line cards section, make sure you're using item.totalTarget and item.totalFinished
 
   if (!user) {
     return (
@@ -536,17 +953,15 @@ export default function SkyrinaDashboard() {
       />
 
       <main className="flex-1 max-w-[1920px] mx-auto px-4 py-2 w-full overflow-y-auto">
-        {/* Error message */}
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded-lg mb-2 text-sm">
             ⚠️ {error}
           </div>
         )}
 
-        {/* Summary Cards - 6 cards in first row */}
+        {/* Summary Cards */}
         {!loading && summary && (
           <div className="grid grid-cols-6 gap-3 mb-4">
-            {/* 1. Meta */}
             <div className="bg-white rounded-lg shadow p-3 border border-gray-200">
               <div className="text-center">
                 <div className="text-blue-900 text-xs font-bold mb-1">META</div>
@@ -554,7 +969,6 @@ export default function SkyrinaDashboard() {
               </div>
             </div>
 
-            {/* 2. Meta RT */}
             <div className="bg-white rounded-lg shadow p-3 border border-gray-200">
               <div className="text-center">
                 <div className="text-blue-900 text-xs font-bold mb-1">META RT</div>
@@ -565,7 +979,6 @@ export default function SkyrinaDashboard() {
               </div>
             </div>
 
-            {/* 3. Tot Producido */}
             <div className="bg-white rounded-lg shadow p-3 border border-gray-200">
               <div className="text-center">
                 <div className="text-blue-900 text-xs font-bold mb-1">TOT PROD</div>
@@ -573,7 +986,6 @@ export default function SkyrinaDashboard() {
               </div>
             </div>
 
-            {/* 4. Eficiencia RT - Only show if production hasn't ended */}
             {!productionEnded ? (
               <div className="bg-white rounded-lg shadow p-3 border border-gray-200">
                 <div className="text-center">
@@ -592,7 +1004,6 @@ export default function SkyrinaDashboard() {
               </div>
             )}
 
-            {/* 5. Diario Eff - Weighted global daily efficiency */}
             <div className="bg-white rounded-lg shadow p-3 border border-gray-200">
               <div className="text-center">
                 <div className="text-blue-900 text-xs font-bold mb-1">DIARIO</div>
@@ -602,7 +1013,6 @@ export default function SkyrinaDashboard() {
               </div>
             </div>
 
-            {/* 6. Cump */}
             <div className="bg-white rounded-lg shadow p-3 border border-gray-200">
               <div className="text-center">
                 <div className="text-blue-900 text-xs font-bold mb-1">CUMP</div>
@@ -612,21 +1022,26 @@ export default function SkyrinaDashboard() {
           </div>
         )}
 
-        {/* Style Run Cards - 7 cards per row */}
-        {!loading && styleRunData.length > 0 && (
+        {/* Line Cards */}
+        {!loading && Object.keys(runDataMap).length > 0 && (
           <div className="grid grid-cols-7 gap-3">
-            {styleRunData.map((run, idx) => {
-              // After 5:36 PM, show daily efficiency instead of real-time
-              const showRealtime = !productionEnded && run.realtimeEfficiency !== null;
-              // Use daily efficiency after production ends
-              const displayEfficiency = showRealtime ? run.realtimeEfficiency : run.dailyEfficiency;
-              const displayLabel = showRealtime ? 'Eff RT' : 'Efficiency';
+            {prepareSortedLines().map((item) => {
+              const { lineNo, runs, efficiency, displayLabel } = item;
+              const lineTotalFinished = calculateLineTotalFinished(runs);
+              const lineTotalTarget = calculateLineTotalTarget(runs);
+              
+              const displayEfficiency = efficiency;
               const status = getLineStatus(displayEfficiency);
-              const cardId = `${run.lineNo}-${run.style}`;
+              const cardId = `L${lineNo}`;
+              
+              const variance = lineTotalFinished - lineTotalTarget;
+              const variancePercent = lineTotalTarget > 0 
+                ? Math.abs((variance / lineTotalTarget) * 100) 
+                : 0;
 
               return (
                 <div
-                  key={cardId}
+                  key={`${lineNo}`}
                   onMouseEnter={() => setHoveredCard(cardId)}
                   onMouseLeave={() => setHoveredCard(null)}
                   className={`bg-white rounded-lg shadow-md 
@@ -635,22 +1050,20 @@ export default function SkyrinaDashboard() {
                     border-t border-r border-b border-gray-200
                     ${hoveredCard === cardId ? 'shadow-lg scale-[1.01]' : ''}`}
                 >
-                  {/* Header */}
                   <div className="px-2 py-1.5 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white">
                     <div className="flex justify-between items-center mb-0.5">
-                      <span className="font-bold text-base text-gray-900">L{run.lineNo}</span>
+                      <span className="font-bold text-base text-gray-900">L{lineNo}</span>
                       <div className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${getStatusBgColor(status.color)}`}>
                         {status.icon}
                       </div>
                     </div>
-                    <div className="text-xs font-medium text-gray-600 truncate" title={run.style}>
-                      {run.style}
+                    
+                    <div className="text-xs font-medium text-gray-600 truncate" title={runs.map(r => r.style).join(', ')}>
+                      {runs.map(r => r.style).join(' / ')}
                     </div>
                   </div>
 
-                  {/* Content */}
                   <div className="p-2">
-                    {/* Efficiency Display - Shows Eff RT before 5:36, Efficiency after */}
                     <div className="mb-2">
                       <div className="flex justify-between items-center mb-0.5">
                         <span className="text-[10px] text-gray-500">{displayLabel}</span>
@@ -666,29 +1079,27 @@ export default function SkyrinaDashboard() {
                       </div>
                     </div>
 
-                    {/* Stats - Two columns */}
                     <div className="grid grid-cols-2 gap-1 mb-2">
                       <div className="bg-gray-50 rounded p-1.5">
                         <div className="text-[9px] text-gray-500 mb-0.5">Obj RT</div>
-                        <div className="text-sm font-bold text-gray-900">{formatNumber(run.realtimeTarget)}</div>
+                        <div className="text-sm font-bold text-gray-900">{formatNumber(lineTotalTarget)}</div>
                       </div>
                       <div className="bg-gray-50 rounded p-1.5">
                         <div className="text-[9px] text-gray-500 mb-0.5">Cosido</div>
-                        <div className="text-sm font-bold text-gray-900">{formatNumber(run.sewed)}</div>
+                        <div className="text-sm font-bold text-gray-900">{formatNumber(lineTotalFinished)}</div>
                       </div>
                     </div>
 
-                    {/* Variance */}
                     <div className="flex justify-between items-center pt-1.5 border-t border-gray-100">
                       <span className="text-[10px] text-gray-500">Var</span>
                       <span className={`font-mono font-bold flex items-center gap-0.5 text-xs ${
-                        run.sewed > run.realtimeTarget ? 'text-green-600' : 
-                        run.sewed < run.realtimeTarget ? 'text-red-600' : 'text-gray-600'
+                        lineTotalFinished > lineTotalTarget ? 'text-green-600' : 
+                        lineTotalFinished < lineTotalTarget ? 'text-red-600' : 'text-gray-600'
                       }`}>
-                        {run.sewed > run.realtimeTarget ? '↑' : run.sewed < run.realtimeTarget ? '↓' : '→'}
-                        {run.sewed > run.realtimeTarget ? '+' : ''}{formatNumber(Math.abs(run.sewed - run.realtimeTarget))}
+                        {lineTotalFinished > lineTotalTarget ? '↑' : lineTotalFinished < lineTotalTarget ? '↓' : '→'}
+                        {lineTotalFinished > lineTotalTarget ? '+' : ''}{formatNumber(Math.abs(variance))}
                         <span className="text-[8px] opacity-75">
-                          ({run.realtimeTarget > 0 ? Math.abs(((run.sewed - run.realtimeTarget) / run.realtimeTarget * 100)).toFixed(0) : 0}%)
+                          ({variancePercent.toFixed(0)}%)
                         </span>
                       </span>
                     </div>
@@ -699,7 +1110,6 @@ export default function SkyrinaDashboard() {
           </div>
         )}
 
-        {/* Loading state */}
         {loading && (
           <div className="bg-white rounded-xl shadow p-6">
             <div className="animate-pulse">
@@ -709,8 +1119,7 @@ export default function SkyrinaDashboard() {
           </div>
         )}
 
-        {/* No data state */}
-        {!loading && styleRunData.length === 0 && (
+        {!loading && Object.keys(runDataMap).length === 0 && (
           <div className="bg-white rounded-xl shadow p-12 text-center">
             <p className="text-gray-500 text-xl font-medium">
               No se encontraron datos para esta fecha
@@ -731,7 +1140,7 @@ export default function SkyrinaDashboard() {
                       <th className="px-3 py-2 text-left">Operador lento</th>
                       <th className="px-3 py-2 text-left">Ayudado por</th>
                       <th className="px-3 py-2 text-left">Piezas</th>
-                     </tr>
+                    </tr>
                   </thead>
                   <tbody className="text-gray-900">
                     {assignments.map((a, idx) => (

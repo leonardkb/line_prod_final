@@ -6,6 +6,7 @@ import WorkOrderList from "../components/planner/WorkOrderList";
 import WorkOrderForm from "../components/planner/WorkOrderForm";
 import LineAssignmentForm from "../components/planner/LineAssignmentForm";
 import { format } from "date-fns";
+import PlanBoard from "../components/planner/PlanBoard";
 
 export default function AdvancedPlanningPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -14,6 +15,7 @@ export default function AdvancedPlanningPage() {
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
   const [userRole, setUserRole] = useState(null);
   const [message, setMessage] = useState("");
+
   const [workOrderData, setWorkOrderData] = useState({
     workOrderNo: "",
     quantity: "",
@@ -36,6 +38,7 @@ export default function AdvancedPlanningPage() {
     setActiveTab("assign");
   };
 
+  
   const handleCreateWorkOrder = () => {
     setSelectedWorkOrder(null);
     setWorkOrderData({
@@ -70,7 +73,8 @@ export default function AdvancedPlanningPage() {
   const tabs = [
     { id: "dashboard", label: "Dashboard", visible: true },
     { id: "list", label: "Órdenes", visible: true },
-    { id: "create", label: "Crear Orden", visible: ["engineer", "supervisor", "soporte_it", "skyrina"].includes(userRole) },
+     { id: "planboard", label: "Plan Board", visible: true },  // NEW
+    { id: "create", label: "Crear Orden", visible: ["engineer", "supervisor", "soporte_it", "skyrina", "planner"].includes(userRole) },
     { id: "assign", label: "Asignar", visible: selectedWorkOrder !== null },
   ];
 
@@ -125,30 +129,31 @@ export default function AdvancedPlanningPage() {
         {/* Content */}
         <div className="space-y-6">
           {activeTab === "dashboard" && <PlanningDashboard />}
-          
-          {activeTab === "list" && (
-            <WorkOrderList 
-              onSelectWorkOrder={handleSelectWorkOrder}
-              onEdit={(order) => {
-                setSelectedWorkOrder(order);
-                setWorkOrderData({
-                  workOrderNo: order.work_order_no,
-                  quantity: order.quantity,
-                  customerName: order.customer_name,
-                  styleDescription: order.style_description,
-                  color: order.color || "",
-                  fabricSupplier: order.fabric_supplier || "",
-                  styleCode: order.style_code || "",
-                  lineNo: order.line_no || "",
-                  runDate: order.run_date || "",
-                });
-                setActiveTab("create");
-              }}
-              onDelete={() => {
-                setMessage("Orden eliminada correctamente");
-              }}
-            />
-          )}
+          {activeTab === "planboard" && <PlanBoard />}  {/* NEW */ }
+{activeTab === "list" && (
+  <WorkOrderList 
+    onSelectWorkOrder={handleSelectWorkOrder}
+    onEdit={(order) => {
+      setSelectedWorkOrder(order);
+      setWorkOrderData({
+        workOrderNo: order.work_order_no,
+        quantity: order.quantity,
+        customerName: order.customer_name,
+        styleDescription: order.style_description,
+        color: order.color || "",
+        fabricSupplier: order.fabric_supplier || "",
+        styleCode: order.style_code || "",
+        lineNo: order.line_no || "",
+        runDate: order.run_date || "",
+      });
+      setActiveTab("create");
+    }}
+    onDelete={(id) => {
+      setMessage(`✅ Orden cancelada exitosamente`);
+      // Refresh the list automatically
+    }}
+  />
+)}
           
           {activeTab === "create" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

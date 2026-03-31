@@ -77,9 +77,7 @@ function AlarmStatusIndicator({ isActive, isPaused, nextAlarmTime }) {
 }
 
 /**
- * Hourly Plan UI exactly like your screenshot:
- * Row / Slot Hours / Slot Target / Cum Target / Sewed (input) / Cum Sewed
- * + Total Sewed box + Tip.
+ * Hourly Plan UI
  */
 function HourlyPlanCard({
   slots,
@@ -259,16 +257,9 @@ function HourlyRow({ label, slots, renderCell, strong = false, last = false }) {
 const calculateRealtimeEfficiency = (finishedGarments, operatorsCount, workingHours, sam, elapsedMinutes) => {
   if (!operatorsCount || !workingHours || !sam || !elapsedMinutes) return 0;
   
-  // Calculate SAM produced
   const samProduced = finishedGarments * sam;
-  
-  // Calculate available minutes so far (operators * actual time elapsed)
   const availableMinutes = operatorsCount * elapsedMinutes;
-  
-  // Calculate real-time efficiency
-  const realtimeEfficiency = availableMinutes > 0 
-    ? (samProduced / availableMinutes) * 100 
-    : 0;
+  const realtimeEfficiency = availableMinutes > 0 ? (samProduced / availableMinutes) * 100 : 0;
   
   return Math.round(realtimeEfficiency * 100) / 100;
 };
@@ -276,11 +267,17 @@ const calculateRealtimeEfficiency = (finishedGarments, operatorsCount, workingHo
 export default function LineLeaderPage() {
   const navigate = useNavigate();
 
-  const [tab, setTab] = useState("summary"); // "summary" | "operations"
+  const [tab, setTab] = useState("summary");
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+
+  // Multi-style state
+  const [styles, setStyles] = useState([]);
+  const [selectedStyleIndex, setSelectedStyleIndex] = useState(0);
+  const [sewedInputs, setSewedInputs] = useState({}); // { styleIndex: { opId: { slotLabel: value } } }
+  const [lockedSlots, setLockedSlots] = useState({}); // { styleIndex: { opId-slotLabel: true } }
 
   // Alarm System State
   const [alarmVisible, setAlarmVisible] = useState(false);
@@ -292,27 +289,19 @@ export default function LineLeaderPage() {
   const alarmSoundRef = useRef(null);
   const alarmTimerRef = useRef(null);
 
-  const [latest, setLatest] = useState(null);
-  const [runData, setRunData] = useState(null);
-  const [sewedInputs, setSewedInputs] = useState({});
-  
-  // NEW: Locked slots state - tracks which slots are locked for each operator/operation
-  const [lockedSlots, setLockedSlots] = useState({});
-
   // State for line balancing assignments
   const [assignments, setAssignments] = useState([]);
 
-  // New state for time-based view
+  // State for time-based view
   const [selectedTimeSlot, setSelectedTimeSlot] = useState(null);
 
-  // ========== NEW: Summary Banner States ==========
+  // Summary Banner States
   const [realTimeTarget, setRealTimeTarget] = useState(0);
   const [realTimeProgress, setRealTimeProgress] = useState(0);
   const [overallEfficiency, setOverallEfficiency] = useState(0);
   const [targetAchievement, setTargetAchievement] = useState(0);
   const [realTimeEfficiency, setRealTimeEfficiency] = useState(0);
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
-  // ================================================
 
   const user = useMemo(() => {
     try {
@@ -322,9 +311,91 @@ export default function LineLeaderPage() {
     }
   }, []);
 
-  // Helper to get token from localStorage (always fresh)
   const getToken = () => localStorage.getItem("token");
 
+  // Get current style data
+  const currentStyle = useMemo(() => {
+    if (!styles.length || selectedStyleIndex >= styles.length) return null;
+    return styles[selectedStyleIndex];
+  }, [styles, selectedStyleIndex]);
+
+  // Get current style's slots
+  const slots = useMemo(() => currentStyle?.slots || [], [currentStyle]);
+
+  // Get current style's slot targets map
+  const slotTargetsMap = useMemo(() => {
+    const map = {};
+    if (currentStyle?.slotTargets) {
+      for (const row of currentStyle.slotTargets) {
+        map[row.slot_label] = {
+          slot_target: safeNum(row.slot_target),
+          cumulative_target: safeNum(row.cumulative_target),
+        };
+      }
+    }
+    return map;
+  }, [currentStyle]);
+
+  // Get current style's operators list
+  const operatorsList = useMemo(() => currentStyle?.operators || [], [currentStyle]);
+
+  // Get current style's target
+  const target = useMemo(() => Number(currentStyle?.run?.target_pcs || 0), [currentStyle]);
+
+  // Get current style's header info
+  const header = useMemo(() => {
+    if (!currentStyle?.run) return {
+      line: "",
+      date: "",
+      style: "",
+      operators: "0",
+      sam: "0",
+      workingHours: "0",
+      efficiency: 0.7,
+    };
+    
+    const run = currentStyle.run;
+    return {
+      line: String(run.line_no ?? ""),
+      date: String(run.run_date ?? ""),
+      style: String(run.style ?? ""),
+      operators: String(run.operators_count ?? ""),
+      sam: String(run.sam_minutes ?? ""),
+      workingHours: String(run.working_hours ?? ""),
+      efficiency: Number(run.efficiency ?? 0.7),
+    };
+  }, [currentStyle]);
+
+  // Helper: get operation to operator mapping for current style
+  const operationToOperatorMap = useMemo(() => {
+    const map = new Map();
+    if (currentStyle?.operations) {
+      currentStyle.operations.forEach(block => {
+        const operatorId = block.operator?.id;
+        if (operatorId) {
+          block.operations?.forEach(op => map.set(op.id, operatorId));
+        }
+      });
+    }
+    return map;
+  }, [currentStyle]);
+
+  // Helper: get operator to operation ids mapping for current style
+  const operatorToOperationIds = useMemo(() => {
+    const map = new Map();
+    if (currentStyle?.operations) {
+      currentStyle.operations.forEach(block => {
+        const operatorId = block.operator?.id;
+        if (operatorId) {
+          const opIds = block.operations?.map(op => op.id) || [];
+          map.set(operatorId, opIds);
+        }
+      });
+    }
+    return map;
+  }, [currentStyle]);
+
+  // ========== ALARM SYSTEM ==========
   useEffect(() => {
     alarmSoundRef.current = new Audio(
       "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
@@ -352,7 +423,6 @@ export default function LineLeaderPage() {
   useEffect(() => {
     const setupAlarm = () => {
       if (alarmTimerRef.current) clearTimeout(alarmTimerRef.current);
-
       if (alarmPaused || snoozeUntil > Date.now()) return;
 
       const intervalMs = alarmInterval * 60 * 1000;
@@ -383,28 +453,8 @@ export default function LineLeaderPage() {
     const snoozeCheck = setInterval(() => {
       if (snoozeUntil && Date.now() > snoozeUntil) setSnoozeUntil(null);
     }, 60000);
-
     return () => clearInterval(snoozeCheck);
   }, [snoozeUntil]);
-
-  useEffect(() => {
-    const token = getToken();
-    if (!token || !user) return navigate("/", { replace: true });
-
-    if (normalizeRole(user.role) !== "lineleader") {
-      return navigate("/planner", { replace: true });
-    }
-
-    const lineNo = user.line_number;
-    if (!lineNo) {
-      setErrMsg("No hay una línea asignada a este usuario. Por favor contacte al administrador.");
-      setLoading(false);
-      return;
-    }
-
-    fetchLatestRun(lineNo);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
 
   const handleDismissAlarm = () => {
     setAlarmVisible(false);
@@ -435,7 +485,26 @@ export default function LineLeaderPage() {
     if (saved) setLastSavedTime(new Date(saved));
   }, []);
 
-  async function fetchLatestRun(lineNo) {
+  // ========== FETCH DATA ==========
+  useEffect(() => {
+    const token = getToken();
+    if (!token || !user) return navigate("/", { replace: true });
+
+    if (normalizeRole(user.role) !== "lineleader") {
+      return navigate("/planner", { replace: true });
+    }
+
+    const lineNo = user.line_number;
+    if (!lineNo) {
+      setErrMsg("No hay una línea asignada a este usuario. Por favor contacte al administrador.");
+      setLoading(false);
+      return;
+    }
+
+    fetchLatestStyleGroup(lineNo);
+  }, [user]);
+
+  async function fetchLatestStyleGroup(lineNo) {
     setLoading(true);
     setErrMsg("");
     setSaveMsg("");
@@ -448,30 +517,91 @@ export default function LineLeaderPage() {
     }
 
     try {
+      // First, try to get runs grouped by style_group_id
       const res = await fetch(
-        `http://localhost:5000/api/lineleader/latest-run?line=${encodeURIComponent(lineNo)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        `http://localhost:5000/api/multi-style/latest-group?line=${encodeURIComponent(lineNo)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
       );
       const json = await res.json();
 
-      if (!json.success) {
-        setErrMsg(json.error || "No se pudo cargar la corrida de tu línea.");
-        setLatest(null);
-        setRunData(null);
-        return;
+      if (json.success && json.styles && json.styles.length > 0) {
+        // Load complete data for each style
+        const stylesData = [];
+        for (const style of json.styles) {
+          const runDataRes = await fetch(
+            `http://localhost:5000/api/get-run-data/${style.run.id}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const runDataJson = await runDataRes.json();
+          
+          if (runDataJson.success) {
+            stylesData.push({
+              run: runDataJson.run,
+              slots: runDataJson.slots,
+              operators: runDataJson.operators,
+              operations: runDataJson.operations,
+              slotTargets: runDataJson.slotTargets,
+            });
+          }
+        }
+
+        if (stylesData.length > 0) {
+          setStyles(stylesData);
+          initializeStylesData(stylesData);
+          
+          // Fetch assignments for the first style
+          if (stylesData[0].run.id) {
+            await fetchAssignments(stylesData[0].run.id);
+          }
+          
+          setLoading(false);
+          return;
+        }
       }
 
-      setLatest(json);
+      // Fallback: try single style runs
+      await fetchSingleStyleRuns(lineNo);
+    } catch (e) {
+      console.error("Error fetching style group:", e);
+      await fetchSingleStyleRuns(lineNo);
+    }
+  }
 
-      if (json?.run?.id) {
-        await fetchRunData(json.run.id);
-        await fetchAssignments(json.run.id);
-      } else {
-        setErrMsg("Se encontró la última corrida pero falta el ID de la corrida.");
+  async function fetchSingleStyleRuns(lineNo) {
+    const token = getToken();
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/lineleader/latest-run?line=${encodeURIComponent(lineNo)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const json = await res.json();
+      
+      if (!json.success) {
+        setErrMsg(json.error || "No se encontraron corridas para esta línea");
+        setLoading(false);
+        return;
+      }
+      
+      const runDataRes = await fetch(
+        `http://localhost:5000/api/get-run-data/${json.run.id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const runDataJson = await runDataRes.json();
+      
+      if (runDataJson.success) {
+        const stylesData = [{
+          run: runDataJson.run,
+          slots: runDataJson.slots,
+          operators: runDataJson.operators,
+          operations: runDataJson.operations,
+          slotTargets: runDataJson.slotTargets,
+        }];
+        setStyles(stylesData);
+        initializeStylesData(stylesData);
+        
+        if (runDataJson.run.id) {
+          await fetchAssignments(runDataJson.run.id);
+        }
       }
     } catch (e) {
       setErrMsg(e.message || "Error de red");
@@ -480,65 +610,40 @@ export default function LineLeaderPage() {
     }
   }
 
-  async function fetchRunData(runId) {
-    const token = getToken();
-    if (!token) {
-      setErrMsg("No estás autenticado. Por favor inicia sesión de nuevo.");
-      return;
-    }
-
-    try {
-      const res = await fetch(`http://localhost:5000/api/get-run-data/${runId}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      const json = await res.json();
-
-      if (!json.success) {
-        setErrMsg(json.error || "No se pudieron cargar los detalles de la corrida.");
-        setRunData(null);
-        return;
-      }
-
-      setRunData(json);
-
-      const next = {};
-      // Load saved sewed data and initialize lock state
-      const initialLockedState = {};
+  function initializeStylesData(stylesData) {
+    const initialInputs = {};
+    const initialLocks = {};
+    
+    for (let i = 0; i < stylesData.length; i++) {
+      const style = stylesData[i];
+      initialInputs[i] = {};
+      initialLocks[i] = {};
       
-      for (const block of json.operations || []) {
+      for (const block of style.operations || []) {
         for (const op of block.operations || []) {
-          const opId = op.id;
+          initialInputs[i][op.id] = {};
           const sewed = op.sewed_data || {};
-          next[opId] = {};
           
-          for (const s of json.slots || []) {
-            const label = s.slot_label;
-            const value = sewed?.[label] ?? "";
-            next[opId][label] = value;
+          for (const slot of style.slots || []) {
+            const value = sewed[slot.slot_label] ?? "";
+            initialInputs[i][op.id][slot.slot_label] = value;
             
-            // Lock the slot if there's a value > 0
             if (value && Number(value) > 0) {
-              initialLockedState[`${opId}-${label}`] = true;
+              initialLocks[i][`${op.id}-${slot.slot_label}`] = true;
             }
           }
         }
       }
-      
-      setSewedInputs(next);
-      setLockedSlots(initialLockedState);
-
-      // Auto-select first time slot
-      if (json.slots?.length > 0) {
-        setSelectedTimeSlot(json.slots[0].slot_label);
-      }
-    } catch (e) {
-      setErrMsg(e.message || "Error de red al cargar los detalles de la corrida");
+    }
+    
+    setSewedInputs(initialInputs);
+    setLockedSlots(initialLocks);
+    
+    if (stylesData.length > 0 && stylesData[0].slots?.length > 0) {
+      setSelectedTimeSlot(stylesData[0].slots[0].slot_label);
     }
   }
 
-  // Fetch assignments for the current run
   async function fetchAssignments(runId) {
     const token = getToken();
     if (!token) return;
@@ -551,84 +656,38 @@ export default function LineLeaderPage() {
       if (json.success) setAssignments(json.assignments);
     } catch (e) {
       console.error("Error fetching assignments:", e);
-      // Don't show error to user; it's non‑critical
     }
   }
 
-  const header = useMemo(() => {
-    const r = latest?.run;
-    return {
-      line: String(r?.line_no ?? ""),
-      date: String(r?.run_date ?? ""),
-      style: String(r?.style ?? ""),
-      operators: String(r?.operators_count ?? ""),
-      sam: String(r?.sam_minutes ?? ""),
-      workingHours: String(r?.working_hours ?? ""),
-      efficiency: Number(r?.efficiency ?? 0.7),
-    };
-  }, [latest]);
+  // ========== CAPACITY CALCULATIONS ==========
+  const getOperatorTotalCapacity = (operatorId) => {
+    const operatorBlock = currentStyle?.operations?.find(b => b.operator?.id === operatorId);
+    if (!operatorBlock?.operations?.length) return 0;
+    
+    let totalSecondsSum = 0;
+    operatorBlock.operations.forEach(operation => {
+      const t1 = Number(operation.t1_sec);
+      const t2 = Number(operation.t2_sec);
+      const t3 = Number(operation.t3_sec);
+      const t4 = Number(operation.t4_sec);
+      const t5 = Number(operation.t5_sec);
+      
+      if (t1 > 0) totalSecondsSum += t1;
+      if (t2 > 0) totalSecondsSum += t2;
+      if (t3 > 0) totalSecondsSum += t3;
+      if (t4 > 0) totalSecondsSum += t4;
+      if (t5 > 0) totalSecondsSum += t5;
+    });
+    
+    if (totalSecondsSum <= 0) return 0;
+    const averageSecondsPerPiece = totalSecondsSum / 5;
+    return 3600 / averageSecondsPerPiece;
+  };
 
-  const target = useMemo(() => Number(latest?.run?.target_pcs || 0), [latest]);
-
-  const slotsForSummary = useMemo(() => {
-    return (latest?.slots || []).map((s) => ({
-      id: s.slot_label,
-      label: s.slot_label,
-      hours: Number(s.planned_hours || 0),
-      startTime: s.slot_start,
-      endTime: s.slot_end,
-    }));
-  }, [latest]);
-
-  const slots = useMemo(() => runData?.slots || [], [runData]);
-
-  const slotTargetsMap = useMemo(() => {
-    const map = {};
-    for (const row of runData?.slotTargets || []) {
-      map[row.slot_label] = {
-        slot_target: safeNum(row.slot_target),
-        cumulative_target: safeNum(row.cumulative_target),
-      };
-    }
-    return map;
-  }, [runData]);
-
-  const operatorsList = useMemo(() => runData?.operators || [], [runData]);
-
-  // ========== SYNCHRONIZATION LOGIC ==========
-  const operationToOperatorMap = useMemo(() => {
-    const map = new Map();
-    if (runData?.operations) {
-      runData.operations.forEach(block => {
-        const operatorId = block.operator?.id;
-        if (operatorId) {
-          block.operations?.forEach(op => map.set(op.id, operatorId));
-        }
-      });
-    }
-    return map;
-  }, [runData]);
-
-  const operatorToOperationIds = useMemo(() => {
-    const map = new Map();
-    if (runData?.operations) {
-      runData.operations.forEach(block => {
-        const operatorId = block.operator?.id;
-        if (operatorId) {
-          const opIds = block.operations?.map(op => op.id) || [];
-          map.set(operatorId, opIds);
-        }
-      });
-    }
-    return map;
-  }, [runData]);
-
-  // Updated handleSewedChange with lock check
-  const handleSewedChange = useCallback((opId, slotLabel, value) => {
-    // Check if this slot is locked
+  // ========== HANDLE SEWED CHANGES ==========
+  const handleSewedChange = useCallback((styleIndex, opId, slotLabel, value) => {
     const lockKey = `${opId}-${slotLabel}`;
-    if (lockedSlots[lockKey]) {
-      // Show a warning message
+    if (lockedSlots[styleIndex]?.[lockKey]) {
       setSaveMsg("⚠️ Este valor ya está guardado y no puede modificarse");
       setTimeout(() => setSaveMsg(""), 3000);
       return;
@@ -639,70 +698,52 @@ export default function LineLeaderPage() {
       if (!operatorId) {
         return {
           ...prev,
-          [opId]: {
-            ...(prev[opId] || {}),
-            [slotLabel]: value,
+          [styleIndex]: {
+            ...prev[styleIndex],
+            [opId]: {
+              ...(prev[styleIndex]?.[opId] || {}),
+              [slotLabel]: value,
+            },
           },
         };
       }
 
       const affectedOpIds = operatorToOperationIds.get(operatorId) || [];
       const newState = { ...prev };
+      
+      if (!newState[styleIndex]) newState[styleIndex] = {};
+      
       affectedOpIds.forEach(id => {
-        newState[id] = {
-          ...(newState[id] || {}),
+        newState[styleIndex][id] = {
+          ...(newState[styleIndex][id] || {}),
           [slotLabel]: value,
         };
       });
+      
       return newState;
     });
   }, [operationToOperatorMap, operatorToOperationIds, lockedSlots]);
 
-  useEffect(() => {
-    if (!runData || !operatorToOperationIds.size) return;
-
-    setSewedInputs(prev => {
-      let changed = false;
-      const newState = { ...prev };
-      for (const [operatorId, opIds] of operatorToOperationIds.entries()) {
-        if (opIds.length <= 1) continue;
-        const firstOpId = opIds[0];
-        const firstOpData = prev[firstOpId] || {};
-        opIds.slice(1).forEach(id => {
-          if (JSON.stringify(prev[id]) !== JSON.stringify(firstOpData)) {
-            newState[id] = { ...firstOpData };
-            changed = true;
-          }
-        });
-      }
-      return changed ? newState : prev;
-    });
-  }, [runData, operatorToOperationIds]);
-
-  // ========== Helper functions for time-based view ==========
-  const handleTimeSlotChange = (operatorId, slotLabel, value) => {
-    if (!operatorId || !slotLabel) return;
+  const handleTimeSlotChange = (styleIndex, operatorId, slotLabel, value) => {
+    if (styleIndex === undefined || !operatorId || !slotLabel) return;
     
     const opIds = operatorToOperationIds.get(operatorId) || [];
     if (opIds.length === 0) return;
     
-    // Use the first operation as the primary one for data entry
     const primaryOpId = opIds[0];
-    handleSewedChange(primaryOpId, slotLabel, value);
+    handleSewedChange(styleIndex, primaryOpId, slotLabel, value);
   };
 
-  const getOperatorValueForSlot = (operatorId, slotLabel) => {
+  const getOperatorValueForSlot = (styleIndex, operatorId, slotLabel) => {
     const opIds = operatorToOperationIds.get(operatorId) || [];
     if (opIds.length === 0) return '';
     
-    // Try to get from primary operation first
     const primaryOpId = opIds[0];
-    const value = sewedInputs[primaryOpId]?.[slotLabel];
+    const value = sewedInputs[styleIndex]?.[primaryOpId]?.[slotLabel];
     
-    // If primary operation doesn't have a value, check other operations
     if (!value && opIds.length > 1) {
       for (const opId of opIds) {
-        const val = sewedInputs[opId]?.[slotLabel];
+        const val = sewedInputs[styleIndex]?.[opId]?.[slotLabel];
         if (val) return val;
       }
     }
@@ -710,81 +751,58 @@ export default function LineLeaderPage() {
     return value || '';
   };
 
-  // Check if a slot is locked for an operator
-  const isSlotLocked = (operatorId, slotLabel) => {
+  const isSlotLocked = (styleIndex, operatorId, slotLabel) => {
     const opIds = operatorToOperationIds.get(operatorId) || [];
     if (opIds.length === 0) return false;
     const primaryOpId = opIds[0];
-    return lockedSlots[`${primaryOpId}-${slotLabel}`] || false;
+    return lockedSlots[styleIndex]?.[`${primaryOpId}-${slotLabel}`] || false;
   };
 
-  // Calculate total cumulative for an operator across all slots (based on actual inputs)
-  const getOperatorTotalCumulative = (operatorId) => {
+  const getOperatorTotalCumulative = (styleIndex, operatorId) => {
     let cumulative = 0;
-    if (!runData?.slots) return cumulative;
+    const slotsList = slots;
+    if (!slotsList.length) return cumulative;
     
-    for (const slot of runData.slots) {
-      const slotValue = getOperatorValueForSlot(operatorId, slot.slot_label);
+    for (const slot of slotsList) {
+      const slotValue = getOperatorValueForSlot(styleIndex, operatorId, slot.slot_label);
       cumulative += Number(slotValue) || 0;
     }
     return cumulative;
   };
 
-  // ========== TOTAL FOR ALL OPERATIONS ==========
-  const allOperationsTotal = useMemo(() => {
-    const operatorSeen = new Set();
-    let total = 0;
-
-    for (const [opId, opData] of Object.entries(sewedInputs)) {
-      const operatorId = operationToOperatorMap.get(opId);
-      if (!operatorId) {
-        for (const slotLabel of Object.keys(opData)) {
-          total += safeNum(opData[slotLabel]);
-        }
-      } else {
-        if (!operatorSeen.has(operatorId)) {
-          operatorSeen.add(operatorId);
-          for (const slotLabel of Object.keys(opData)) {
-            total += safeNum(opData[slotLabel]);
-          }
-        }
-      }
-    }
-    return total;
-  }, [sewedInputs, operationToOperatorMap]);
-
-  // ========== FINISHED GARMENTS TOTAL (packing / empaque) ==========
-  const finishedGarmentsTotal = useMemo(() => {
-    if (!runData) return 0;
-    let total = 0;
-    const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
-    for (const block of runData.operations || []) {
-      for (const op of block.operations || []) {
-        const opName = (op.operation_name || '').toLowerCase();
-        if (packingKeywords.some(keyword => opName.includes(keyword))) {
-          const sewedData = op.sewed_data || {};
-          for (const qty of Object.values(sewedData)) {
-            total += safeNum(qty);
-          }
-        }
-      }
-    }
-    return total;
-  }, [runData]);
-
-  const getOperationTotal = useMemo(() => {
-    return (opId) => {
-      if (!opId) return 0;
-      let sum = 0;
-      const data = sewedInputs[opId] || {};
-      for (const slotLabel of Object.keys(data)) sum += safeNum(data[slotLabel]);
-      return sum;
-    };
+  const getOperationTotal = useCallback((styleIndex, opId) => {
+    if (!opId) return 0;
+    let sum = 0;
+    const data = sewedInputs[styleIndex]?.[opId] || {};
+    for (const slotLabel of Object.keys(data)) sum += safeNum(data[slotLabel]);
+    return sum;
   }, [sewedInputs]);
 
-  // Updated handleSave to lock saved values
+  // ========== FINISHED GARMENTS TOTAL ==========
+  const finishedGarmentsTotal = useMemo(() => {
+    let total = 0;
+    const packingKeywords = ['pack', 'emp', 'empaque', 'packing', 'finished', 'terminado'];
+    
+    for (let i = 0; i < styles.length; i++) {
+      const style = styles[i];
+      for (const block of style.operations || []) {
+        for (const op of block.operations || []) {
+          const opName = (op.operation_name || '').toLowerCase();
+          if (packingKeywords.some(keyword => opName.includes(keyword))) {
+            const sewedData = sewedInputs[i]?.[op.id] || {};
+            for (const qty of Object.values(sewedData)) {
+              total += safeNum(qty);
+            }
+          }
+        }
+      }
+    }
+    return total;
+  }, [styles, sewedInputs]);
+
+  // ========== SAVE FUNCTION ==========
   async function handleSave() {
-    if (!runData?.run?.id) return;
+    if (!currentStyle || !currentStyle.run?.id) return;
 
     const token = getToken();
     if (!token) {
@@ -797,21 +815,20 @@ export default function LineLeaderPage() {
     setErrMsg("");
 
     try {
-      const runId = runData.run.id;
-
+      const runId = currentStyle.run.id;
       const entries = [];
-      for (const block of runData.operations || []) {
+      
+      for (const block of currentStyle.operations || []) {
         const operatorNo = block.operator?.operator_no;
-
         for (const op of block.operations || []) {
           const opId = op.id;
           const opName = op.operation_name;
-
+          
           for (const s of slots) {
             const slotLabel = s.slot_label;
-            const raw = sewedInputs?.[opId]?.[slotLabel];
+            const raw = sewedInputs[selectedStyleIndex]?.[opId]?.[slotLabel];
             const qty = raw === "" ? 0 : safeNum(raw);
-
+            
             entries.push({ operatorNo, operationName: opName, slotLabel, sewedQty: qty });
           }
         }
@@ -832,17 +849,18 @@ export default function LineLeaderPage() {
         return;
       }
 
-      // After successful save, lock all non-zero values
+      // Lock saved values
       const newLockedState = { ...lockedSlots };
-      for (const block of runData.operations || []) {
+      for (const block of currentStyle.operations || []) {
         for (const op of block.operations || []) {
           const opId = op.id;
           for (const s of slots) {
             const slotLabel = s.slot_label;
-            const value = sewedInputs?.[opId]?.[slotLabel];
+            const value = sewedInputs[selectedStyleIndex]?.[opId]?.[slotLabel];
             const lockKey = `${opId}-${slotLabel}`;
             if (value && Number(value) > 0) {
-              newLockedState[lockKey] = true;
+              if (!newLockedState[selectedStyleIndex]) newLockedState[selectedStyleIndex] = {};
+              newLockedState[selectedStyleIndex][lockKey] = true;
             }
           }
         }
@@ -851,10 +869,10 @@ export default function LineLeaderPage() {
 
       updateLastSavedTime();
       setAlarmVisible(false);
+      setSaveMsg(`✅ Actualizaciones por hora guardadas para ${currentStyle.run.style}`);
 
-      setSaveMsg("✅ Actualizaciones por hora guardadas y bloqueadas");
-      await fetchRunData(runId);
-      await fetchAssignments(runId);
+      // Refresh data
+      await fetchLatestStyleGroup(user.line_number);
     } catch (e) {
       setErrMsg(e.message || "Error de red al guardar");
     } finally {
@@ -862,18 +880,16 @@ export default function LineLeaderPage() {
     }
   }
 
-  // ========== Real‑time target calculation ==========
+  // ========== REAL-TIME CALCULATIONS ==========
   useEffect(() => {
-    if (!runData || !slots.length || !slotTargetsMap || !target) return;
+    if (!currentStyle || !slots.length || !slotTargetsMap || !target) return;
 
     const calculateRealtime = () => {
       const now = new Date();
       const dateStr = header.date ? header.date.split('T')[0] : new Date().toISOString().split('T')[0];
       
-      // Production timeline: 8:00 AM to 5:36 PM
       const PRODUCTION_START = new Date(`${dateStr}T08:00:00`);
       
-      // Get the last slot end time (should be 17:36:00)
       const slotsWithTime = slots
         .map(slot => {
           if (!slot.slot_start || !slot.slot_end) return null;
@@ -883,31 +899,26 @@ export default function LineLeaderPage() {
         })
         .filter(s => s !== null);
       
-      // Find the latest end time from slots (should be 17:36:00)
       const PRODUCTION_END = slotsWithTime.length > 0 
         ? new Date(Math.max(...slotsWithTime.map(s => s.end.getTime())))
         : new Date(`${dateStr}T17:36:00`);
 
-      // Calculate elapsed time in minutes since production start
       const elapsedMs = now - PRODUCTION_START;
       const elapsedMins = Math.max(0, elapsedMs / (1000 * 60));
       setElapsedMinutes(elapsedMins);
 
-      // If production hasn't started yet (before 8:00 AM)
       if (now < PRODUCTION_START) {
         setRealTimeTarget(0);
         setRealTimeProgress(0);
         return;
       }
       
-      // If production is complete (after 5:36 PM)
       if (now >= PRODUCTION_END) {
         setRealTimeTarget(target);
         setRealTimeProgress(100);
         return;
       }
       
-      // Calculate real-time target based on time elapsed since 8:00 AM
       const elapsedMilliseconds = now - PRODUCTION_START;
       const totalProductionMilliseconds = PRODUCTION_END - PRODUCTION_START;
       
@@ -920,29 +931,25 @@ export default function LineLeaderPage() {
     };
 
     calculateRealtime();
-    const interval = setInterval(calculateRealtime, 60000); // Update every minute
+    const interval = setInterval(calculateRealtime, 60000);
     return () => clearInterval(interval);
-  }, [runData, slots, slotTargetsMap, target, header.date]);
+  }, [currentStyle, slots, slotTargetsMap, target, header.date]);
 
-  // ========== Compute overall efficiency, achievement, and real‑time efficiency ==========
   useEffect(() => {
-    if (!runData || target === 0 || finishedGarmentsTotal === undefined) return;
+    if (!currentStyle || target === 0 || finishedGarmentsTotal === undefined) return;
 
     const operatorsCount = Number(header.operators) || 0;
     const workingHours = Number(header.workingHours) || 0;
     const sam = Number(header.sam) || 0;
 
-    // Overall efficiency (based on full day)
     const availableMinutes = operatorsCount * workingHours * 60;
     const totalSAMOutput = finishedGarmentsTotal * sam;
     const eff = availableMinutes > 0 ? (totalSAMOutput / availableMinutes) * 100 : 0;
     setOverallEfficiency(Math.round(eff * 100) / 100);
 
-    // Target achievement
     const ach = target > 0 ? (finishedGarmentsTotal / target) * 100 : 0;
     setTargetAchievement(Math.round(ach * 100) / 100);
 
-    // REAL-TIME EFFICIENCY - based on actual time elapsed
     const rtEff = calculateRealtimeEfficiency(
       finishedGarmentsTotal,
       operatorsCount,
@@ -951,10 +958,8 @@ export default function LineLeaderPage() {
       elapsedMinutes
     );
     setRealTimeEfficiency(rtEff);
-    
-  }, [runData, target, finishedGarmentsTotal, header.operators, header.workingHours, header.sam, elapsedMinutes]);
+  }, [currentStyle, target, finishedGarmentsTotal, header.operators, header.workingHours, header.sam, elapsedMinutes]);
 
-  // ========== Helper for status dots ==========
   const getStatusDot = (value, type) => {
     if (value === undefined || value === null) return 'bg-gray-400';
     if (type === 'efficiency') {
@@ -974,7 +979,39 @@ export default function LineLeaderPage() {
     }
     return 'bg-gray-400';
   };
-  // ============================================
+
+  const slotsForSummary = useMemo(() => {
+    if (!currentStyle?.slots) return [];
+    return currentStyle.slots.map((s) => ({
+      id: s.slot_label,
+      label: s.slot_label,
+      hours: Number(s.planned_hours || 0),
+      startTime: s.slot_start,
+      endTime: s.slot_end,
+    }));
+  }, [currentStyle]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <NavBarline />
+        <div className="mx-auto max-w-6xl p-4 sm:p-6">
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">Cargando…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (errMsg) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <NavBarline />
+        <div className="mx-auto max-w-6xl p-4 sm:p-6">
+          <div className="rounded-2xl border bg-white p-5 shadow-sm text-red-600">{errMsg}</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -992,10 +1029,9 @@ export default function LineLeaderPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-xl font-semibold text-gray-900">
-                {header.line} • {header.style || "Corrida"}
-                <span className="ml-3 inline-flex items-center rounded-full border
-                 bg-gray-50 px-3 py-1 text-sm text-gray-700">
-                  {header.date || ""}
+                Línea {user?.line_number} • {header.date || ""}
+                <span className="ml-3 inline-flex items-center rounded-full border bg-gray-50 px-3 py-1 text-sm text-gray-700">
+                  {header.style || "Corrida"}
                 </span>
               </div>
 
@@ -1048,6 +1084,38 @@ export default function LineLeaderPage() {
               )}
             </div>
           </div>
+
+          {/* Style Selection Tabs */}
+          {styles.length > 1 && (
+            <div className="mt-4">
+              <div className="flex gap-2 border-b">
+                {styles.map((style, idx) => (
+                  <button
+                    key={style.run.id}
+                    onClick={() => {
+                      setSelectedStyleIndex(idx);
+                      if (style.slots?.length > 0) {
+                        setSelectedTimeSlot(style.slots[0].slot_label);
+                      }
+                      if (style.run.id) {
+                        fetchAssignments(style.run.id);
+                      }
+                    }}
+                    className={`px-4 py-2 text-sm font-medium transition-all ${
+                      selectedStyleIndex === idx
+                        ? "border-b-2 border-gray-900 text-gray-900"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {style.run.style}
+                    <span className="ml-1 text-xs text-gray-400">
+                      ({Math.round(style.run.target_pcs || 0)} pcs)
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {saveMsg ? (
@@ -1057,24 +1125,16 @@ export default function LineLeaderPage() {
         ) : null}
 
         <div className="mt-4">
-          {loading ? (
-            <div className="rounded-2xl border bg-white p-5 shadow-sm">Cargando…</div>
-          ) : errMsg ? (
-            <div className="rounded-2xl border bg-white p-5 shadow-sm text-red-600">
-              {errMsg}
-            </div>
-          ) : tab === "summary" ? (
+          {tab === "summary" ? (
             <>
               {/* Summary Cards Banner */}
-              {runData && (
+              {currentStyle && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-5 mb-6">
-                  {/* Objetivo Total */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Objetivo Total</p>
                     <p className="text-3xl font-bold text-gray-900">{Math.round(target).toLocaleString()}</p>
                     <p className="text-xs text-gray-500 mt-2">piezas</p>
                   </div>
-                  {/* Meta en tiempo real */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Meta en tiempo real</p>
                     <p className="text-3xl font-bold text-gray-900">
@@ -1089,13 +1149,11 @@ export default function LineLeaderPage() {
                     </div>
                     <p className="text-xs text-gray-500 mt-1">{realTimeProgress.toFixed(1)}% del objetivo</p>
                   </div>
-                  {/* Total Cosido (finished garments) */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Total Cosido</p>
                     <p className="text-3xl font-bold text-gray-900">{Math.round(finishedGarmentsTotal).toLocaleString()}</p>
                     <p className="text-xs text-gray-500 mt-2">piezas terminadas</p>
                   </div>
-                  {/* Real‑time Efficiency con indicador */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`w-3 h-3 rounded-full ${getStatusDot(realTimeEfficiency, 'realtimeEfficiency')}`}></span>
@@ -1103,20 +1161,15 @@ export default function LineLeaderPage() {
                     </div>
                     <p className="text-3xl font-bold text-gray-900">{realTimeEfficiency.toFixed(1)}%</p>
                     <p className="text-xs text-gray-500 mt-2">basada en tiempo real</p>
-                    
-                    
                   </div>
-                  {/* Eficiencia con indicador */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`w-3 h-3 rounded-full ${getStatusDot(overallEfficiency, 'efficiency')}`}></span>
-                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider"> Diario Eficiencia</p>
+                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Diario Eficiencia</p>
                     </div>
                     <p className="text-3xl font-bold text-gray-900">{overallEfficiency.toFixed(1)}%</p>
                     <p className="text-xs text-gray-500 mt-2">basada en SAM</p>
                   </div>
-
-                  {/* Cumplimiento con indicador */}
                   <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`w-3 h-3 rounded-full ${getStatusDot(targetAchievement, 'cumplimiento')}`}></span>
@@ -1130,14 +1183,11 @@ export default function LineLeaderPage() {
                       ></div>
                     </div>
                   </div>
-
-                  
-
-                  
                 </div>
               )}
 
               <MetaSummary header={header} target={target} slots={slotsForSummary} />
+              
               {assignments.length > 0 && (
                 <div className="mt-6 rounded-3xl border bg-white shadow-sm p-6">
                   <h2 className="text-lg font-semibold mb-4">Asignaciones de ayuda</h2>
@@ -1173,203 +1223,217 @@ export default function LineLeaderPage() {
               )}
             </>
           ) : (
-            // SIMPLIFIED TIME-BASED OPERATIONS SECTION WITH LOCKING
-            <div className="space-y-4">
-              {/* Time Slot Selection Cards with cumulative meta */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
-                {slots.map((slot) => {
-                  const isSelected = selectedTimeSlot === slot.slot_label;
-                  const slotTarget = slotTargetsMap[slot.slot_label]?.slot_target || 0;
-                  const cumulativeTarget = slotTargetsMap[slot.slot_label]?.cumulative_target || 0;
-                  
-                  return (
-                    <button
-                      key={slot.slot_label}
-                      onClick={() => setSelectedTimeSlot(slot.slot_label)}
-                      className={`
-                        rounded-2xl border p-4 text-center transition-all
-                        ${isSelected 
-                          ? 'bg-gray-900 text-white border-gray-900 shadow-lg ring-2 ring-gray-900 ring-offset-2' 
-                          : 'bg-white hover:border-gray-300 hover:shadow-md'
-                        }
-                      `}
-                    >
-                      <div className="font-bold text-xl">{slot.slot_label}</div>
-                      <div className={`text-xs mt-1 ${isSelected ? 'text-gray-300' : 'text-gray-500'}`}>
-                        Meta: {Math.round(slotTarget)}
+            // Time-based Operations Section
+            currentStyle && (
+              <div className="space-y-4">
+                {/* Time Slot Selection Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+                  {slots.map((slot) => {
+                    const isSelected = selectedTimeSlot === slot.slot_label;
+                    const slotTarget = slotTargetsMap[slot.slot_label]?.slot_target || 0;
+                    const cumulativeTarget = slotTargetsMap[slot.slot_label]?.cumulative_target || 0;
+                    
+                    return (
+                      <button
+                        key={slot.slot_label}
+                        onClick={() => setSelectedTimeSlot(slot.slot_label)}
+                        className={`
+                          rounded-2xl border p-4 text-center transition-all
+                          ${isSelected 
+                            ? 'bg-gray-900 text-white border-gray-900 shadow-lg ring-2 ring-gray-900 ring-offset-2' 
+                            : 'bg-white hover:border-gray-300 hover:shadow-md'
+                          }
+                        `}
+                      >
+                        <div className="font-bold text-xl">{slot.slot_label}</div>
+                        <div className={`text-xs mt-1 ${isSelected ? 'text-gray-300' : 'text-gray-500'}`}>
+                          Meta: {Math.round(slotTarget)}
+                        </div>
+                        <div className={`text-xs font-semibold mt-1 ${isSelected ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Acum: {Math.round(cumulativeTarget)}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Selected Time Slot Data Entry Section */}
+                {selectedTimeSlot && (
+                  <div className="rounded-3xl border bg-white shadow-sm overflow-hidden">
+                    <div className="p-6">
+                      <div className="mb-6">
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          Ingresar producción por hora - Estilo {header.style}
+                        </h3>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Ingresa las piezas cosidas en cada bloque horario
+                        </p>
+                        <p className="text-xs text-gray-500 mt-2">
+                          🔒 Los valores guardados no pueden modificarse
+                        </p>
                       </div>
-                      <div className={`text-xs font-semibold mt-1 ${isSelected ? 'text-gray-300' : 'text-gray-700'}`}>
-                        Acum: {Math.round(cumulativeTarget)}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
 
-              {/* Selected Time Slot Data Entry Section - with cumulative based on actual inputs */}
-              {selectedTimeSlot && (
-                <div className="rounded-3xl border bg-white shadow-sm overflow-hidden">
-                  <div className="p-6">
-                    <div className="mb-6">
-                      <h3 className="text-lg font-semibold text-gray-900">
-                        Ingresar producción por hora
-                      </h3>
-                      <p className="text-sm text-gray-600 mt-1">
-                        Ingresa las piezas cosidas en cada bloque horario
-                      </p>
-                      <p className="text-xs text-gray-500 mt-2">
-                        🔒 Los valores guardados no pueden modificarse
-                      </p>
-                    </div>
-
-                    {/* Clean operator input grid with operator number, name, capacity, and cumulative total based on actual inputs */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                      {operatorsList.map((op) => {
-                        const operatorId = op.id;
-                        const currentValue = getOperatorValueForSlot(operatorId, selectedTimeSlot);
-                        const isLocked = isSlotLocked(operatorId, selectedTimeSlot);
-                        
-                        // Get operator's block for capacity info
-                        const operatorBlock = runData?.operations?.find(b => b.operator?.id === operatorId);
-                        const firstOperation = operatorBlock?.operations?.[0];
-                        const capacity = firstOperation?.capacity_per_hour || 0;
-                        
-                        // Calculate cumulative total for this operator based on ALL inputs across all slots
-                        const cumulativeTotal = getOperatorTotalCumulative(operatorId);
-                        
-                        return (
-                          <div key={op.id} className="flex flex-col items-center relative">
-                            <div className="text-xl font-semibold text-gray-900">
-                              Op. {op.operator_no}
-                            </div>
-                            <div className="text-sm text-gray-600 mb-1 text-center">
-                              {op.operator_name || 'Sin nombre'}
-                            </div>
-                            <div className="text-xs font-medium text-blue-600 mb-2">
-                              Cap: {capacity} pcs/h
-                            </div>
-                            <div className="relative">
-                              <input
-                                type="number"
-                                value={currentValue}
-                                onChange={(e) => handleTimeSlotChange(
-                                  operatorId,
-                                  selectedTimeSlot,
-                                  e.target.value
-                                )}
-                                placeholder="0"
-                                disabled={isLocked}
-                                className={`
-                                  w-24 h-24 rounded-2xl border-2 text-center
-                                  text-3xl font-bold outline-none transition-all
-                                  ${isLocked 
-                                    ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed' 
-                                    : 'border-gray-200 focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400'
-                                  }
-                                `}
-                                min="0"
-                              />
-                              {isLocked && (
-                                <span className="absolute -top-2 -right-2 text-xs bg-gray-800 text-white px-1.5 py-0.5 rounded-full">
-                                  🔒
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-sm font-semibold text-gray-700 mt-2">
-                              Total acumulado: {cumulativeTotal}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Collapsible operations details - also showing capacity */}
-                    <details className="mt-8">
-                      <summary className="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">
-                        ► Ver todas las operaciones de este operador
-                      </summary>
-                      <div className="mt-4 space-y-4 border-t pt-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
                         {operatorsList.map((op) => {
-                          const block = runData?.operations?.find(b => b.operator?.id === op.id);
-                          
-                          // Calculate operator cumulative total across all slots
-                          const operatorCumulativeTotal = getOperatorTotalCumulative(op.id);
+                          const operatorId = op.id;
+                          const currentValue = getOperatorValueForSlot(selectedStyleIndex, operatorId, selectedTimeSlot);
+                          const isLocked = isSlotLocked(selectedStyleIndex, operatorId, selectedTimeSlot);
+                          const totalCapacity = getOperatorTotalCapacity(operatorId);
+                          const cumulativeTotal = getOperatorTotalCumulative(selectedStyleIndex, operatorId);
                           
                           return (
-                            <div key={op.id} className="bg-gray-50 rounded-xl p-4">
-                              <div className="flex justify-between items-center mb-2">
-                                <div className="font-semibold text-gray-900">
-                                  Operador {op.operator_no} - {op.operator_name}
-                                </div>
-                                <div className="text-sm bg-gray-200 px-3 py-1 rounded-full">
-                                  Total acumulado: {operatorCumulativeTotal} pcs
-                                </div>
+                            <div key={op.id} className="flex flex-col items-center relative">
+                              <div className="text-xl font-semibold text-gray-900">
+                                Op. {op.operator_no}
                               </div>
-                              <div className="space-y-2">
-                                {block?.operations?.map((operation) => {
-                                  const opTotal = getOperationTotal(operation.id);
-                                  return (
-                                    <div key={operation.id} className="flex justify-between items-center text-sm">
-                                      <span className="text-gray-600">{operation.operation_name}</span>
-                                      <div className="flex items-center gap-4">
-                                        <span className="text-xs text-gray-500">
-                                          Cap: {operation.capacity_per_hour || 0} pcs/h
-                                        </span>
-                                        <span className="font-medium text-gray-900">{opTotal} pcs</span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
+                              <div className="text-sm text-gray-600 mb-1 text-center">
+                                {op.operator_name || 'Sin nombre'}
+                              </div>
+                              <div className="text-xs font-medium text-blue-600 mb-2">
+                                Cap: {totalCapacity.toFixed(3)} pcs/h
+                              </div>
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  value={currentValue}
+                                  onChange={(e) => handleTimeSlotChange(
+                                    selectedStyleIndex,
+                                    operatorId,
+                                    selectedTimeSlot,
+                                    e.target.value
+                                  )}
+                                  placeholder="0"
+                                  disabled={isLocked}
+                                  className={`
+                                    w-24 h-24 rounded-2xl border-2 text-center
+                                    text-3xl font-bold outline-none transition-all
+                                    ${isLocked 
+                                      ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed' 
+                                      : 'border-gray-200 focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400'
+                                    }
+                                  `}
+                                  min="0"
+                                />
+                                {isLocked && (
+                                  <span className="absolute -top-2 -right-2 text-xs bg-gray-800 text-white px-1.5 py-0.5 rounded-full">
+                                    🔒
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-sm font-semibold text-gray-700 mt-2">
+                                Total acumulado: {cumulativeTotal}
                               </div>
                             </div>
                           );
                         })}
                       </div>
-                    </details>
-                  </div>
-                </div>
-              )}
 
-              {/* Global Save Button - Always visible */}
-              <div className="sticky bottom-4 bg-white rounded-2xl border shadow-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    {alarmVisible && (
-                      <button
-                        onClick={handleDismissAlarm}
-                        className="rounded-xl bg-red-100 text-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-200"
-                      >
-                        ⏰ Cerrar alarma
-                      </button>
-                    )}
-                    <div className="text-sm text-gray-600">
-                      {lastSavedTime && (
-                        <>Último guardado: {new Date(lastSavedTime).toLocaleTimeString()}</>
-                      )}
+                      {/* Collapsible operations details */}
+                      <details className="mt-8">
+                        <summary className="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">
+                          ► Ver todas las operaciones de este operador
+                        </summary>
+                        <div className="mt-4 space-y-4 border-t pt-4">
+                          {operatorsList.map((op) => {
+                            const block = currentStyle?.operations?.find(b => b.operator?.id === op.id);
+                            const operatorTotalCapacity = getOperatorTotalCapacity(op.id);
+                            const operatorCumulativeTotal = getOperatorTotalCumulative(selectedStyleIndex, op.id);
+                            
+                            return (
+                              <div key={op.id} className="bg-gray-50 rounded-xl p-4">
+                                <div className="flex justify-between items-center mb-2">
+                                  <div className="font-semibold text-gray-900">
+                                    Operador {op.operator_no} - {op.operator_name}
+                                  </div>
+                                  <div className="text-sm bg-gray-200 px-3 py-1 rounded-full">
+                                    Capacidad total: {operatorTotalCapacity.toFixed(3)} pcs/h
+                                  </div>
+                                </div>
+                                <div className="flex justify-between items-center mb-3">
+                                  <div className="text-sm text-gray-500">Total acumulado:</div>
+                                  <div className="text-sm font-semibold bg-gray-200 px-3 py-1 rounded-full">
+                                    {operatorCumulativeTotal} pcs
+                                  </div>
+                                </div>
+                                <div className="space-y-2">
+                                  {block?.operations?.map((operation) => {
+                                    const opTotal = getOperationTotal(selectedStyleIndex, operation.id);
+                                    let opCapacity = 0;
+                                    const t1 = Number(operation.t1_sec);
+                                    const t2 = Number(operation.t2_sec);
+                                    const t3 = Number(operation.t3_sec);
+                                    const t4 = Number(operation.t4_sec);
+                                    const t5 = Number(operation.t5_sec);
+                                    
+                                    const times = [t1, t2, t3, t4, t5].filter(t => t > 0);
+                                    if (times.length > 0) {
+                                      const avgSeconds = times.reduce((a, b) => a + b, 0) / times.length;
+                                      opCapacity = 3600 / avgSeconds;
+                                    }
+                                    
+                                    return (
+                                      <div key={operation.id} className="flex justify-between items-center text-sm">
+                                        <span className="text-gray-600">{operation.operation_name}</span>
+                                        <div className="flex items-center gap-4">
+                                          <span className="text-xs text-gray-500">
+                                            Cap: {opCapacity.toFixed(3)} pcs/h
+                                          </span>
+                                          <span className="font-medium text-gray-900">{opTotal} pcs</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
                     </div>
                   </div>
-                  <button
-                    onClick={handleSave}
-                    disabled={saving || !runData}
-                    className="rounded-xl bg-green-600 text-white px-8 py-3 text-base font-semibold
-                             hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed
-                             shadow-lg hover:shadow-xl transition-all"
-                  >
-                    {saving ? (
-                      <span className="flex items-center gap-2">
-                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Guardando...
-                      </span>
-                    ) : (
-                      '💾 Guardar producción'
-                    )}
-                  </button>
+                )}
+
+                {/* Global Save Button */}
+                <div className="sticky bottom-4 bg-white rounded-2xl border shadow-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {alarmVisible && (
+                        <button
+                          onClick={handleDismissAlarm}
+                          className="rounded-xl bg-red-100 text-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-200"
+                        >
+                          ⏰ Cerrar alarma
+                        </button>
+                      )}
+                      <div className="text-sm text-gray-600">
+                        {lastSavedTime && (
+                          <>Último guardado: {new Date(lastSavedTime).toLocaleTimeString()}</>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving || !currentStyle}
+                      className="rounded-xl bg-green-600 text-white px-8 py-3 text-base font-semibold
+                               hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed
+                               shadow-lg hover:shadow-xl transition-all"
+                    >
+                      {saving ? (
+                        <span className="flex items-center gap-2">
+                          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Guardando...
+                        </span>
+                      ) : (
+                        '💾 Guardar producción'
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            )
           )}
         </div>
       </div>

@@ -1,4 +1,4 @@
-// components/planner/WorkOrderForm.jsx (Updated with Add Customer feature)
+// components/planner/WorkOrderForm.jsx (Updated with correct quantity handling)
 import { useState, useEffect } from "react";
 import StyleSelectorModal from "./StyleSelectorModal";
 
@@ -147,10 +147,10 @@ export default function WorkOrderForm({
       
       const requestBody = {
         workOrderNo: workOrderData.workOrderNo,
-        totalQuantity: parseFloat(workOrderData.totalQuantity) || 0,
+        totalQuantity: parseFloat(workOrderData.totalQuantity) || 0,      // Original order quantity
         warehouseStock: parseFloat(workOrderData.warehouseStock) || 0,
         extraQuantity: parseFloat(workOrderData.extraQuantity) || 0,
-        totalToProduce: parseFloat(workOrderData.totalToProduce),
+        totalToProduce: parseFloat(workOrderData.totalToProduce),         // This is what goes to quantity column
         commitmentDate: workOrderData.commitmentDate,
         customerId: parseInt(workOrderData.customerId),
         styleDescription: workOrderData.styleDescription,
@@ -160,6 +160,8 @@ export default function WorkOrderForm({
         lineNo: workOrderData.lineNo || null,
         runDate: workOrderData.runDate || null,
       };
+      
+      console.log("📤 Creating work order with data:", requestBody);
       
       const response = await fetch(url, {
         method,
@@ -178,6 +180,11 @@ export default function WorkOrderForm({
 
       setSuccess(isEditMode ? "✅ Orden actualizada exitosamente!" : "✅ Orden creada exitosamente!");
       
+      if (onSuccess) {
+        // Pass back the created work order with all fields
+        onSuccess(data.workOrder);
+      }
+      
       if (!isEditMode) {
         setTimeout(() => {
           // Reset form
@@ -195,21 +202,12 @@ export default function WorkOrderForm({
           onChange("fabrics", []);
           onChange("lineNo", "");
           onChange("runDate", "");
-          
-          if (onSuccess) {
-            onSuccess(data.workOrder);
-          }
-        }, 1500);
-      } else {
-        setTimeout(() => {
-          if (onSuccess) {
-            onSuccess(data.workOrder);
-          }
         }, 1500);
       }
       
     } catch (err) {
       setError(`❌ Error: ${err.message}`);
+      console.error("Error creating work order:", err);
     } finally {
       setLoading(false);
     }
@@ -485,6 +483,9 @@ export default function WorkOrderForm({
                   placeholder="Ej: 3000"
                   required
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  Cantidad que el cliente ordenó originalmente
+                </p>
               </div>
 
               <div>
@@ -527,7 +528,7 @@ export default function WorkOrderForm({
 
               <div className="pt-2 border-t border-gray-200">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Total a Producir <span className="text-red-500">*</span>
+                  Total a Producir (Cantidad Requerida) <span className="text-red-500">*</span>
                 </label>
                 <div className="bg-blue-50 rounded-xl p-3">
                   <p className="text-2xl font-bold text-blue-700">
@@ -535,6 +536,9 @@ export default function WorkOrderForm({
                   </p>
                   <p className="text-xs text-blue-600 mt-1">
                     Fórmula: Cantidad Total - Almacén + Extras = {Math.round(workOrderData.totalQuantity || 0).toLocaleString()} - {Math.round(workOrderData.warehouseStock || 0).toLocaleString()} + {Math.round(workOrderData.extraQuantity || 0).toLocaleString()}
+                  </p>
+                  <p className="text-xs text-blue-500 mt-1 font-medium">
+                    📦 Esta es la cantidad que se asignará a producción
                   </p>
                 </div>
               </div>
@@ -653,6 +657,7 @@ export default function WorkOrderForm({
             <div className="pt-4 text-xs text-gray-500 border-t">
               <p>Los campos marcados con <span className="text-red-500">*</span> son obligatorios</p>
               <p className="mt-1">La orden se creará con estado "Pendiente" y podrá ser asignada a líneas después.</p>
+              <p className="mt-1 text-blue-600">📦 La cantidad que se producirá es: <strong>{workOrderData.totalToProduce ? Math.round(workOrderData.totalToProduce).toLocaleString() : "0"}</strong> piezas</p>
             </div>
 
             {/* Submit Button */}

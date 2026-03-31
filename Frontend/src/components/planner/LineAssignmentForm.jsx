@@ -1,44 +1,48 @@
-// components/planner/LineAssignmentForm.jsx
+// components/planner/LineAssignmentForm.jsx - COMPLETELY FIXED VERSION
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Calendar, Factory, AlertCircle, CheckCircle, Clock, Calculator } from "lucide-react";
+import { Calendar, Factory, AlertCircle, CheckCircle, Clock, Calculator, Plus, Trash2, Layers } from "lucide-react";
 
 export default function LineAssignmentForm({ workOrder, onAssignmentComplete }) {
   const [availableLines, setAvailableLines] = useState([]);
-  const [selectedLine, setSelectedLine] = useState(null);
-  const [assignedDate, setAssignedDate] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [quantity, setQuantity] = useState("");
+  const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [existingAssignments, setExistingAssignments] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(format(new Date(), "yyyy-MM-dd"));
+
+  // Initialize with one empty assignment slot
+  useEffect(() => {
+    setAssignments([{
+      id: Date.now(),
+      lineNo: "",
+      quantity: 0,
+      lineData: null,
+      daysInfo: null
+    }]);
+  }, []);
 
   useEffect(() => {
     fetchAvailableLines();
     fetchExistingAssignments();
-  }, [assignedDate]);
+  }, [selectedDate]);
 
   const fetchAvailableLines = async () => {
-    setLoading(true);
     try {
       const token = localStorage.getItem("token");
       const response = await fetch(
-        `http://localhost:5001/api/planning/available-lines?date=${assignedDate}`,
+        `http://localhost:5001/api/planning/available-lines?date=${selectedDate}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await response.json();
       if (data.success) {
         setAvailableLines(data.lines);
-        if (data.lines.length > 0 && !selectedLine) {
-          setSelectedLine(data.lines[0]);
-        }
       } else {
         setError(data.error);
       }
     } catch (err) {
       setError(err.message);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -58,36 +62,27 @@ export default function LineAssignmentForm({ workOrder, onAssignmentComplete }) 
     }
   };
 
-  // Calculate days needed using the improved minute-based formula
-  // Formula: Days = (Quantity × SAM) / (Operators × WorkingHours × 60 × Efficiency)
-  const calculateDaysNeeded = () => {
-    if (!selectedLine || !quantity || parseInt(quantity) <= 0) return null;
+  // Calculate days needed for a specific line and quantity
+  const calculateDaysNeeded = (lineData, quantity) => {
+    if (!lineData || !quantity || quantity <= 0) return null;
     
-    const qty = parseInt(quantity);
-    const samMinutes = parseFloat(selectedLine.sam_minutes) || 3.5;
-    const operators = parseInt(selectedLine.operators_count) || 20;
-    const workingHours = parseFloat(selectedLine.working_hours) || 8;
-    const efficiency = parseFloat(selectedLine.efficiency) || 0.85;
+    const qty = quantity;
+    const samMinutes = parseFloat(lineData.sam_minutes) || 3.5;
+    const operators = parseInt(lineData.operators_count) || 20;
+    const workingHours = parseFloat(lineData.working_hours) || 8;
+    const efficiency = parseFloat(lineData.efficiency) || 0.85;
     
-    // Total minutes needed to produce the order (AUTO)
     const totalMinutesNeeded = qty * samMinutes;
-    
-    // Total available minutes per day (AUTO)
     const dailyAvailableMinutes = operators * workingHours * 60;
-    
-    // Effective minutes available after efficiency (AUTO)
     const effectiveDailyMinutes = dailyAvailableMinutes * efficiency;
-    
-    // Days needed (AUTO)
     const rawDaysNeeded = totalMinutesNeeded / effectiveDailyMinutes;
     const daysNeeded = Math.ceil(rawDaysNeeded);
     
-    // Calculate daily production rate
     const piecesPerDay = effectiveDailyMinutes / samMinutes;
     const piecesPerHour = piecesPerDay / workingHours;
     const minutesPerPiece = samMinutes / efficiency;
     
-    const startDate = new Date(assignedDate);
+    const startDate = new Date(selectedDate);
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + daysNeeded);
     
@@ -99,114 +94,235 @@ export default function LineAssignmentForm({ workOrder, onAssignmentComplete }) 
       dailyRate: Math.floor(piecesPerDay),
       hourlyRate: Math.floor(piecesPerHour),
       totalMinutesNeeded: Math.round(totalMinutesNeeded),
-      dailyAvailableMinutes: Math.round(dailyAvailableMinutes),
       effectiveDailyMinutes: Math.round(effectiveDailyMinutes),
       minutesPerPiece: Math.round(minutesPerPiece * 100) / 100,
       efficiency: Math.round(efficiency * 100),
-      samMinutes,
-      operators,
-      workingHours,
       quantity: qty
     };
   };
 
-  const handleQuantityChange = (e) => {
-    let value = e.target.value;
-    // Remove any non-numeric characters
-    value = value.replace(/[^\d]/g, '');
-    
-    let numValue = parseInt(value);
-    if (isNaN(numValue)) {
-      setQuantity("");
-      return;
-    }
-    
-    // Check against remaining to assign
-    if (numValue > remainingToAssign) {
-      numValue = remainingToAssign;
-    }
-    
-    // Check against line capacity
-    if (selectedLine && numValue > selectedLine.available_capacity) {
-      numValue = selectedLine.available_capacity;
-    }
-    
-    setQuantity(numValue === 0 ? "" : numValue.toString());
+  const handleAddAssignment = () => {
+    setAssignments([...assignments, {
+      id: Date.now(),
+      lineNo: "",
+      quantity: 0,
+      lineData: null,
+      daysInfo: null
+    }]);
   };
 
-  const handleAssignAll = () => {
-    let maxToAssign = remainingToAssign;
-    if (selectedLine && selectedLine.available_capacity < maxToAssign) {
-      maxToAssign = selectedLine.available_capacity;
+  const handleRemoveAssignment = (id) => {
+    if (assignments.length === 1) {
+      setError("Debe tener al menos una asignación");
+      return;
     }
-    if (maxToAssign > 0) {
-      setQuantity(maxToAssign.toString());
-    }
+    setAssignments(assignments.filter(a => a.id !== id));
   };
 
-  const handleAssign = async () => {
-    if (!selectedLine) {
-      setError("Por favor seleccione una línea");
+  // Helper to get max available for a line, optionally excluding a specific assignment
+  const getMaxAvailableForLineInternal = (lineNo, excludeAssignmentId = null) => {
+    const line = availableLines.find(l => l.line_no === lineNo);
+    if (!line) return 0;
+    
+    // Use the server's available_capacity as the starting point
+    // This already accounts for all existing assignments in the database
+    let maxAvailable = line.available_capacity;
+    
+    // Subtract other assignments from the current session
+    // (excluding the one we're currently editing if specified)
+    const otherAssignmentsToSameLine = assignments
+      .filter(a => a.lineNo === lineNo && a.quantity && a.id !== excludeAssignmentId)
+      .reduce((sum, a) => sum + (a.quantity || 0), 0);
+    
+    maxAvailable = maxAvailable - otherAssignmentsToSameLine;
+    
+    // Ensure we don't return negative values
+    return Math.max(0, maxAvailable);
+  };
+
+  // Public version for display
+  const getMaxAvailableForLine = (lineNo, assignmentId = null) => {
+    return getMaxAvailableForLineInternal(lineNo, assignmentId);
+  };
+
+  const handleAssignmentChange = (id, field, value) => {
+    setAssignments(prev => prev.map(assignment => {
+      if (assignment.id === id) {
+        const updated = { ...assignment };
+        
+        if (field === 'lineNo') {
+          const selectedLine = availableLines.find(l => l.line_no === value);
+          updated.lineNo = value;
+          updated.lineData = selectedLine;
+          updated.quantity = 0;
+          updated.daysInfo = null;
+          
+          // Clear any previous errors when changing line
+          setError("");
+        }
+        
+        if (field === 'quantity') {
+          let qty = parseInt(value);
+          if (isNaN(qty)) qty = 0;
+          if (qty < 0) qty = 0;
+          
+          // Check against max available for this line, EXCLUDING this assignment
+          if (updated.lineData) {
+            const maxAvailable = getMaxAvailableForLineInternal(updated.lineNo, id);
+            if (qty > maxAvailable && maxAvailable > 0) {
+              qty = maxAvailable;
+              setError(`⚠️ Línea ${updated.lineNo}: Solo tiene capacidad para ${Math.floor(maxAvailable).toLocaleString()} piezas en esta fecha.`);
+              setTimeout(() => setError(""), 3000);
+            }
+          }
+          
+          // Check against remaining to assign for this work order
+          const remaining = getRemainingToAssignInternal();
+          const currentTotalWithoutThis = getTotalToAssignInternal() - (updated.quantity || 0);
+          if (currentTotalWithoutThis + qty > remaining) {
+            qty = Math.max(0, remaining - currentTotalWithoutThis);
+            if (qty > 0 && qty !== parseInt(value)) {
+              setError(`⚠️ Solo quedan ${remaining.toLocaleString()} piezas pendientes por asignar.`);
+              setTimeout(() => setError(""), 3000);
+            }
+          }
+          
+          updated.quantity = qty;
+          
+          // Update days info
+          if (updated.lineData && qty > 0) {
+            updated.daysInfo = calculateDaysNeeded(updated.lineData, qty);
+          } else {
+            updated.daysInfo = null;
+          }
+        }
+        
+        return updated;
+      }
+      return assignment;
+    }));
+  };
+
+  const getTotalToAssignInternal = () => {
+    return assignments.reduce((sum, a) => sum + (a.quantity || 0), 0);
+  };
+
+  const getRemainingToAssignInternal = () => {
+    const alreadyAssigned = existingAssignments.reduce((sum, a) => sum + parseFloat(a.assigned_quantity || 0), 0);
+    const totalToProduce = workOrder.totalToProduce || workOrder.quantity;
+    return Math.max(0, totalToProduce - alreadyAssigned);
+  };
+
+  // Public versions for display
+  const getTotalToAssign = () => {
+    return getTotalToAssignInternal();
+  };
+
+  const getRemainingToAssign = () => {
+    return getRemainingToAssignInternal();
+  };
+
+  const handleSubmitAssignments = async () => {
+    // Validate all assignments
+    const validAssignments = assignments.filter(a => a.lineNo && a.quantity > 0);
+    
+    if (validAssignments.length === 0) {
+      setError("Por favor complete al menos una asignación válida");
       return;
     }
-
-    const qtyToAssign = parseInt(quantity);
-    if (isNaN(qtyToAssign) || qtyToAssign <= 0) {
-      setError("La cantidad debe ser mayor a 0");
+    
+    const totalToAssign = getTotalToAssign();
+    const remainingToAssign = getRemainingToAssign();
+    
+    if (totalToAssign > remainingToAssign) {
+      setError(`La cantidad total a asignar (${totalToAssign.toLocaleString()} pzas) excede lo pendiente (${remainingToAssign.toLocaleString()} pzas)`);
       return;
     }
-
-    if (qtyToAssign > selectedLine.available_capacity) {
-      setError(`La línea ${selectedLine.line_no} solo tiene capacidad para ${Math.round(selectedLine.available_capacity).toLocaleString()} piezas en esta fecha`);
-      return;
+    
+    // Check each assignment against line capacity
+    for (const assignment of validAssignments) {
+      // Get max available including this assignment's potential impact
+      const maxAvailable = getMaxAvailableForLineInternal(assignment.lineNo, assignment.id);
+      const qty = assignment.quantity;
+      
+      if (qty > maxAvailable) {
+        setError(`❌ Línea ${assignment.lineNo}: Solo tiene capacidad para ${Math.floor(maxAvailable).toLocaleString()} piezas en esta fecha. Cantidad solicitada: ${qty.toLocaleString()}`);
+        return;
+      }
     }
-
-    if (qtyToAssign > remainingToAssign) {
-      setError(`Solo quedan ${Math.round(remainingToAssign).toLocaleString()} piezas por asignar de esta orden`);
-      return;
-    }
-
+    
     setLoading(true);
     setError("");
     setMessage("");
-
+    
     try {
       const token = localStorage.getItem("token");
-      const response = await fetch("http://localhost:5001/api/line-assignments", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          workOrderId: workOrder.id,
-          lineNo: selectedLine.line_no,
-          assignedDate: assignedDate,
-          quantity: qtyToAssign,
-          plannedStartDate: assignedDate,
-        }),
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        setMessage(`✅ ${qtyToAssign.toLocaleString()} piezas asignadas exitosamente a Línea ${selectedLine.line_no}`);
+      let successCount = 0;
+      let errorCount = 0;
+      const errors = [];
+      
+      // Create each assignment
+      for (const assignment of validAssignments) {
+        try {
+          const response = await fetch("http://localhost:5001/api/line-assignments", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              workOrderId: workOrder.id,
+              lineNo: assignment.lineNo,
+              assignedDate: selectedDate,
+              quantity: assignment.quantity,
+              plannedStartDate: selectedDate,
+            }),
+          });
+          
+          const data = await response.json();
+          if (data.success) {
+            successCount++;
+          } else {
+            errorCount++;
+            errors.push(`Línea ${assignment.lineNo}: ${data.error}`);
+            console.error(`Error assigning to line ${assignment.lineNo}:`, data.error);
+          }
+        } catch (err) {
+          errorCount++;
+          errors.push(`Línea ${assignment.lineNo}: ${err.message}`);
+          console.error(`Error assigning to line ${assignment.lineNo}:`, err);
+        }
+      }
+      
+      // Refresh assignments and available lines
+      await fetchExistingAssignments();
+      await fetchAvailableLines();
+      
+      // Clear current assignments
+      setAssignments([{
+        id: Date.now(),
+        lineNo: "",
+        quantity: 0,
+        lineData: null,
+        daysInfo: null
+      }]);
+      
+      if (successCount > 0) {
+        const successMsg = `✅ ${successCount} asignación(es) creada(s) exitosamente.`;
+        const errorMsg = errorCount > 0 ? `\n❌ ${errorCount} fallaron: ${errors.join("; ")}` : "";
+        setMessage(successMsg + errorMsg);
         
-        // Refresh assignments and available lines
-        await fetchExistingAssignments();
-        await fetchAvailableLines();
-        
-        // Clear quantity field
-        setQuantity("");
-        
-        // If all assigned, close after 2 seconds
-        if (remainingToAssign - qtyToAssign <= 0) {
+        // Check if fully assigned
+        const newRemaining = getRemainingToAssign();
+        if (newRemaining <= 0) {
           setTimeout(() => {
             if (onAssignmentComplete) onAssignmentComplete();
           }, 2000);
         }
       } else {
-        setError(data.error);
+        setError("No se pudo crear ninguna asignación. " + (errors.length ? errors.join("; ") : ""));
       }
+      
     } catch (err) {
       setError(err.message);
     } finally {
@@ -214,29 +330,38 @@ export default function LineAssignmentForm({ workOrder, onAssignmentComplete }) 
     }
   };
 
-  const daysInfo = calculateDaysNeeded();
   const alreadyAssigned = existingAssignments.reduce((sum, a) => sum + parseFloat(a.assigned_quantity || 0), 0);
-  const remainingToAssign = Math.max(0, workOrder.quantity - alreadyAssigned);
+  const remainingToAssign = getRemainingToAssign();
   const isFullyAssigned = remainingToAssign <= 0;
-  const maxAvailable = selectedLine ? Math.min(remainingToAssign, selectedLine.available_capacity) : 0;
+  const totalToAssign = getTotalToAssign();
 
   return (
     <div className="bg-white rounded-xl border shadow-sm">
-      <div className="px-5 py-4 border-b">
-        <h2 className="font-semibold text-gray-900">Asignar a Línea de Producción</h2>
-        <p className="text-sm text-gray-600">
-          Orden: {workOrder.work_order_no} - {workOrder.style_description}
-        </p>
+      <div className="px-5 py-4 border-b bg-gradient-to-r from-gray-50 to-white">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold text-gray-900 text-lg">Asignar a Línea de Producción</h2>
+            <p className="text-sm text-gray-600">
+              Orden: {workOrder.work_order_no} - {workOrder.style_description}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Layers className="w-5 h-5 text-gray-400" />
+            <span className="text-sm text-gray-600">
+              Puede asignar a múltiples líneas
+            </span>
+          </div>
+        </div>
       </div>
 
-      <div className="p-5 space-y-6">
+      <div className="p-5 space-y-6 max-h-[70vh] overflow-y-auto">
         {/* Work Order Info */}
         <div className="bg-gray-50 rounded-xl p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <p className="text-xs text-gray-500">Cantidad Total</p>
+              <p className="text-xs text-gray-500">Total a Producir</p>
               <p className="text-lg font-semibold text-gray-900">
-                {Math.round(workOrder.quantity).toLocaleString()} pzas
+                {Math.round(workOrder.totalToProduce || workOrder.quantity).toLocaleString()} pzas
               </p>
             </div>
             <div>
@@ -252,215 +377,194 @@ export default function LineAssignmentForm({ workOrder, onAssignmentComplete }) 
               </p>
             </div>
             <div>
-              <p className="text-xs text-gray-500">Estado Actual</p>
-              <p className="text-sm font-medium text-gray-700 capitalize">
-                {isFullyAssigned ? 'Completada' : workOrder.status}
+              <p className="text-xs text-gray-500">A Asignar en Esta Sesión</p>
+              <p className="text-lg font-semibold text-purple-600">
+                {Math.round(totalToAssign).toLocaleString()} pzas
               </p>
             </div>
           </div>
         </div>
 
-        {/* Assignment Form - Only show if not fully assigned */}
+        {/* Date Selection */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Fecha de Asignación
+          </label>
+          <div className="relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 pl-10 pr-4 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+            />
+          </div>
+        </div>
+
+        {/* Assignment Slots */}
         {!isFullyAssigned && (
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Fecha de Asignación
-              </label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="date"
-                  value={assignedDate}
-                  onChange={(e) => setAssignedDate(e.target.value)}
-                  className="w-full rounded-xl border border-gray-200 pl-10 pr-4 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
-                />
-              </div>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-700">Asignaciones</h3>
+              <button
+                type="button"
+                onClick={handleAddAssignment}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"
+              >
+                <Plus className="w-4 h-4" />
+                Agregar Línea
+              </button>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Seleccionar Línea
-              </label>
-              <div className="relative">
-                <Factory className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <select
-                  value={selectedLine?.line_no || ""}
-                  onChange={(e) => {
-                    const line = availableLines.find(l => l.line_no === e.target.value);
-                    setSelectedLine(line);
-                    setQuantity(""); // Reset quantity when line changes
-                  }}
-                  className="w-full rounded-xl border border-gray-200 pl-10 pr-4 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
-                >
-                  {availableLines.map(line => (
-                    <option key={line.line_no} value={line.line_no}>
-                      Línea {line.line_no} - Meta: {Math.round(line.target_pcs).toLocaleString()} pzas/día - Disponible: {Math.round(line.available_capacity).toLocaleString()} pzas
-                    </option>
-                  ))}
-                </select>
+            
+            {assignments.map((assignment, index) => (
+              <div key={assignment.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-medium text-gray-500">Asignación #{index + 1}</span>
+                  {assignments.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveAssignment(assignment.id)}
+                      className="p-1 text-gray-400 hover:text-red-500"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">
+                      Seleccionar Línea
+                    </label>
+                    <select
+                      value={assignment.lineNo}
+                      onChange={(e) => handleAssignmentChange(assignment.id, 'lineNo', e.target.value)}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                    >
+                      <option value="">Seleccionar línea...</option>
+                      {availableLines.map(line => {
+                        const maxAvailable = getMaxAvailableForLineInternal(line.line_no);
+                        const isDisabled = maxAvailable <= 0;
+                        return (
+                          <option key={line.line_no} value={line.line_no} disabled={isDisabled}>
+                            Línea {line.line_no} - {Math.round(line.target_pcs).toLocaleString()} pzas/día - 
+                            Disponible: {Math.floor(maxAvailable).toLocaleString()} pzas
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">
+                      Cantidad a Asignar
+                    </label>
+                    <input
+                      type="number"
+                      value={assignment.quantity || ""}
+                      onChange={(e) => handleAssignmentChange(assignment.id, 'quantity', e.target.value)}
+                      min="1"
+                      max={assignment.lineData ? getMaxAvailableForLineInternal(assignment.lineNo, assignment.id) : undefined}
+                      disabled={!assignment.lineNo}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10 disabled:bg-gray-100"
+                      placeholder="Cantidad en piezas"
+                    />
+                    {assignment.lineData && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Máx: {Math.floor(getMaxAvailableForLineInternal(assignment.lineNo, assignment.id)).toLocaleString()} pzas
+                      </p>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Days Calculation for this assignment */}
+                {assignment.daysInfo && assignment.quantity > 0 && (
+                  <div className="mt-3 p-2 bg-blue-50 rounded-lg">
+                    <div className="flex items-start gap-2">
+                      <Calculator className="w-3 h-3 text-blue-600 mt-0.5" />
+                      <div className="text-xs text-blue-800">
+                        <p className="font-medium">Estimación para Línea {assignment.lineNo}</p>
+                        <div className="grid grid-cols-3 gap-2 mt-1">
+                          <span>Días: {assignment.daysInfo.daysNeeded}</span>
+                          <span>Ritmo: {assignment.daysInfo.dailyRate.toLocaleString()} pzas/día</span>
+                          <span>Fin: {assignment.daysInfo.endDate}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Cantidad a Asignar
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={quantity}
-                  onChange={handleQuantityChange}
-                  className="flex-1 rounded-xl border border-gray-200 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
-                  placeholder="Ingrese cantidad en piezas"
-                />
-                <button
-                  onClick={handleAssignAll}
-                  disabled={maxAvailable <= 0}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm hover:bg-gray-200 disabled:opacity-50"
-                >
-                  Todo
-                </button>
-              </div>
-              <div className="mt-1 text-xs text-gray-500">
-                Máximo disponible: {Math.round(maxAvailable).toLocaleString()} pzas
-              </div>
-            </div>
-
-            {/* Improved Days Calculation Display with Formula */}
-            {daysInfo && selectedLine && quantity && parseInt(quantity) > 0 && (
+            ))}
+            
+            {/* Summary of assignments */}
+            {totalToAssign > 0 && (
               <div className="bg-blue-50 rounded-xl p-4">
-                <div className="flex items-start gap-2">
-                  <Calculator className="w-4 h-4 text-blue-600 mt-0.5" />
-                  <div className="text-sm text-blue-800 flex-1">
-                    <p className="font-medium">Estimación de Producción</p>
-                    
-                    {/* Formula Display */}
-                    <div className="mt-2 text-xs bg-blue-100 rounded-lg p-2">
-                      <p className="font-mono text-blue-700">
-                        Días = (Cantidad × SAM) ÷ (Operadores × Horas × 60 × Eficiencia)
-                      </p>
-                      <p className="font-mono text-blue-600 mt-1">
-                        = ({daysInfo.quantity.toLocaleString()} × {daysInfo.samMinutes}) ÷ 
-                        ({daysInfo.operators} × {daysInfo.workingHours} × 60 × {daysInfo.efficiency}%)
-                      </p>
-                      <p className="font-mono text-blue-600">
-                        = {daysInfo.totalMinutesNeeded.toLocaleString()} ÷ {daysInfo.effectiveDailyMinutes.toLocaleString()}
-                      </p>
-                      <p className="font-mono text-blue-800 font-semibold mt-1">
-                        = {daysInfo.rawDaysNeeded} días → {daysInfo.daysNeeded} días hábiles
-                      </p>
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-medium text-blue-800">Resumen de Asignaciones</span>
+                </div>
+                <div className="space-y-1 text-sm text-blue-700">
+                  {assignments.filter(a => a.lineNo && a.quantity > 0).map((a, idx) => (
+                    <div key={idx} className="flex justify-between">
+                      <span>Línea {a.lineNo}:</span>
+                      <span className="font-medium">{a.quantity.toLocaleString()} pzas</span>
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-                      <div>
-                        <span className="text-blue-600">Días necesarios:</span>
-                        <span className="ml-1 font-semibold">{daysInfo.daysNeeded} días</span>
-                      </div>
-                      <div>
-                        <span className="text-blue-600">Ritmo diario:</span>
-                        <span className="ml-1">{Math.round(daysInfo.dailyRate).toLocaleString()} pzas/día</span>
-                      </div>
-                      <div>
-                        <span className="text-blue-600">Ritmo horario:</span>
-                        <span className="ml-1">{Math.round(daysInfo.hourlyRate).toLocaleString()} pzas/h</span>
-                      </div>
-                      <div>
-                        <span className="text-blue-600">Minutos por pieza:</span>
-                        <span className="ml-1">{daysInfo.minutesPerPiece} min</span>
-                      </div>
-                      <div>
-                        <span className="text-blue-600">Inicio:</span>
-                        <span className="ml-1">{daysInfo.startDate}</span>
-                      </div>
-                      <div>
-                        <span className="text-blue-600">Fin estimado:</span>
-                        <span className="ml-1 font-medium">{daysInfo.endDate}</span>
-                      </div>
-                    </div>
-                    
-                    {/* Efficiency Impact */}
-                    <div className="mt-2 text-xs text-blue-600">
-                      <span className="font-medium">Eficiencia aplicada:</span> {daysInfo.efficiency}%
-                    </div>
+                  ))}
+                  <div className="pt-2 mt-2 border-t border-blue-200 flex justify-between font-semibold">
+                    <span>Total a asignar:</span>
+                    <span>{totalToAssign.toLocaleString()} pzas</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span>Pendiente después de asignar:</span>
+                    <span className={remainingToAssign - totalToAssign <= 0 ? "text-green-600" : "text-orange-600"}>
+                      {(remainingToAssign - totalToAssign).toLocaleString()} pzas
+                    </span>
                   </div>
                 </div>
               </div>
             )}
-
-            {/* Capacity Info */}
-            {selectedLine && (
+            
+            {/* Existing Assignments Display */}
+            {existingAssignments.length > 0 && (
               <div className="bg-gray-50 rounded-xl p-4">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-gray-600 mt-0.5" />
-                  <div className="text-sm text-gray-700 flex-1">
-                    <p className="font-medium">Capacidad - Línea {selectedLine.line_no}</p>
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-gray-500">Meta diaria:</span>
-                        <span className="ml-1 font-medium">{Math.round(selectedLine.target_pcs).toLocaleString()} pzas</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Operadores:</span>
-                        <span className="ml-1 font-medium">{selectedLine.operators_count || 20}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Horas/día:</span>
-                        <span className="ml-1 font-medium">{selectedLine.working_hours || 8} hrs</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">SAM:</span>
-                        <span className="ml-1 font-medium">{selectedLine.sam_minutes || 3.5} min</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Eficiencia:</span>
-                        <span className="ml-1 font-medium">{Math.round((selectedLine.efficiency || 0.85) * 100)}%</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Ya asignado:</span>
-                        <span className="ml-1 font-medium">{Math.round(selectedLine.assigned_quantity).toLocaleString()} pzas</span>
-                      </div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Asignaciones Existentes</h3>
+                <div className="space-y-1">
+                  {existingAssignments.map((a, idx) => (
+                    <div key={idx} className="flex justify-between text-sm">
+                      <span>Línea {a.line_no}:</span>
+                      <span className="font-medium">{Math.round(a.assigned_quantity).toLocaleString()} pzas</span>
+                      <span className="text-xs text-gray-500">
+                        {a.status === 'completed' ? '✓ Completada' : a.status === 'planned' ? '📋 Planificada' : a.status}
+                      </span>
                     </div>
-                    <div className="mt-2">
-                      <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-blue-600 rounded-full"
-                          style={{ width: `${Math.min(selectedLine.utilization_percentage || 0, 100)}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-blue-600 mt-1">
-                        Utilización: {Math.round(selectedLine.utilization_percentage || 0)}% | 
-                        Disponible: {Math.round(selectedLine.available_capacity).toLocaleString()} pzas
-                      </p>
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
             )}
-
-            {/* Messages */}
+            
+            {/* Error/Message Display */}
             {error && (
               <div className="bg-red-50 text-red-700 p-3 rounded-xl text-sm flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                 <span>{error}</span>
               </div>
             )}
-
+            
             {message && (
               <div className="bg-green-50 text-green-700 p-3 rounded-xl text-sm flex items-start gap-2">
                 <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                 <span>{message}</span>
               </div>
             )}
-
+            
             {/* Action Buttons */}
             <div className="flex gap-3 pt-4">
               <button
-                onClick={handleAssign}
-                disabled={loading || !selectedLine || !quantity || parseInt(quantity) <= 0}
+                onClick={handleSubmitAssignments}
+                disabled={loading || totalToAssign === 0}
                 className="flex-1 rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Asignando..." : "Asignar a Línea"}
+                {loading ? "Asignando..." : `Asignar ${totalToAssign > 0 ? totalToAssign.toLocaleString() : ""} Piezas`}
               </button>
               <button
                 onClick={() => onAssignmentComplete && onAssignmentComplete()}
@@ -471,17 +575,17 @@ export default function LineAssignmentForm({ workOrder, onAssignmentComplete }) 
             </div>
           </div>
         )}
-
+        
         {/* Fully Assigned Message */}
         {isFullyAssigned && (
           <div className="bg-green-50 rounded-xl p-6 text-center">
             <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-3" />
             <h3 className="text-lg font-semibold text-green-800 mb-2">Orden Completamente Asignada</h3>
             <p className="text-sm text-green-700">
-              Esta orden ya tiene todas sus {Math.round(workOrder.quantity).toLocaleString()} piezas asignadas a líneas de producción.
+              Esta orden ya tiene todas sus {Math.round(workOrder.totalToProduce || workOrder.quantity).toLocaleString()} piezas asignadas.
             </p>
             <p className="text-xs text-green-600 mt-2">
-              Asignaciones: {existingAssignments.length} asignaciones a líneas: {existingAssignments.map(a => a.line_no).join(', ')}
+              {existingAssignments.length} asignaciones a líneas: {existingAssignments.map(a => a.line_no).join(', ')}
             </p>
           </div>
         )}

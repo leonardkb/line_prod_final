@@ -46,6 +46,8 @@ export default function LoginPage() {
         navigate("/planner", { replace: true });
       }else if(roleNorm === "skyrina") {
         navigate("/skyrina", { replace: true });
+      }else if(roleNorm === "planner") {
+        navigate("/advanced-planning", { replace: true });
       }else {
         navigate("/", { replace: true });
       }
