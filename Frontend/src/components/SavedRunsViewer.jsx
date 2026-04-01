@@ -6,6 +6,7 @@ import EditWorkingHoursModal from "./EditWorkingHoursModal";
 import DeleteOperatorModal from "./DeleteOperatorModal";
 import EditEfficiencyModal from "./EditEfficiencyModal";
 import EditOperatorModal from "./EditOperatorModal";
+import OperatorCountEditModal from "./OperatorCountEditModal";
 
 // Helper to ensure dates are compared as YYYY-MM-DD strings
 const normalizeDate = (dateStr) => {
@@ -45,6 +46,9 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
 
   // Date filter state
   const [filterDate, setFilterDate] = useState("");
+
+  const [showOperatorModal, setShowOperatorModal] = useState(false);
+
 
   // Cargar todas las corridas guardadas
   useEffect(() => {
@@ -128,6 +132,19 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
     if (selectedRun) {
       handleSelectRun(selectedRun);
     }
+  };
+
+  const handleOperatorUpdate = (updatedData) => {
+    // Fix: update nested run object properly
+    setRunData({
+      ...runData,
+      run: {
+        ...runData.run,
+        operators_count: updatedData.operatorsCount,
+        target_pcs: updatedData.newTarget,
+        target_per_hour: updatedData.newTargetPerHour,
+      }
+    });
   };
 
   const handleUpdateWorkingHours = async (newWorkingHours) => {
@@ -235,40 +252,53 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
   };
 
   // Convertir operaciones de BD a formato rows del frontend
-  const getRowsFromData = () => {
-    if (!runData?.operations) return [];
+  // In SavedRunsViewer.jsx, update the getRowsFromData function:
 
-    const rows = [];
+// Convertir operaciones de BD a formato rows del frontend
+// In SavedRunsViewer.jsx, update getRowsFromData to ensure operation names are preserved
+const getRowsFromData = () => {
+  if (!runData?.operations) return [];
 
-    runData.operations.forEach((opGroup) => {
-      opGroup.operations.forEach((op) => {
-        const stitched = {};
+  const rows = [];
 
-        if (op.stitched_data) {
-          Object.entries(op.stitched_data).forEach(([slotLabel, qty]) => {
-            if (slotLabel) stitched[slotLabel] = qty;
-          });
-        }
+  runData.operations.forEach((opGroup) => {
+    opGroup.operations.forEach((op) => {
+      const stitched = {};
+      const sewed = {};
 
-        rows.push({
-          id: `db_${op.id}`,
-          operatorNo: opGroup.operator.operator_no.toString(),
-          operatorName: opGroup.operator.operator_name || "",
-          operation: op.operation_name,
-          t1: op.t1_sec?.toString() || "",
-          t2: op.t2_sec?.toString() || "",
-          t3: op.t3_sec?.toString() || "",
-          t4: op.t4_sec?.toString() || "",
-          t5: op.t5_sec?.toString() || "",
-          capPerOperator: parseFloat(op.capacity_per_hour) || 0,
-          stitched,
+      // Get planned/stitched data
+      if (op.stitched_data) {
+        Object.entries(op.stitched_data).forEach(([slotLabel, qty]) => {
+          if (slotLabel) stitched[slotLabel] = qty;
         });
+      }
+
+      // Get actual/sewed data from line leader
+      if (op.sewed_data) {
+        Object.entries(op.sewed_data).forEach(([slotLabel, qty]) => {
+          if (slotLabel) sewed[slotLabel] = qty;
+        });
+      }
+
+      rows.push({
+        id: `db_${op.id}`,
+        operatorNo: opGroup.operator.operator_no.toString(),
+        operatorName: opGroup.operator.operator_name || "",
+        operation: op.operation_name,  // Important: Keep the original operation name
+        t1: op.t1_sec?.toString() || "",
+        t2: op.t2_sec?.toString() || "",
+        t3: op.t3_sec?.toString() || "",
+        t4: op.t4_sec?.toString() || "",
+        t5: op.t5_sec?.toString() || "",
+        capPerOperator: parseFloat(op.capacity_per_hour) || 0,
+        stitched,
+        sewed,
       });
     });
+  });
 
-    return rows;
-  };
-
+  return rows;
+};
   // Metas por slot
   const getSlotTargets = () => {
     if (!runData?.slotTargets) return [];
@@ -494,7 +524,16 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-600">
-                  <span>Operadores: {runData.run.operators_count}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Operadores: {runData.run.operators_count}</span>
+                    <button
+                      onClick={() => setShowOperatorModal(true)}
+                      className="ml-1 text-blue-600 hover:text-blue-800"
+                      title="Editar número de operadores"
+                    >
+                      ✎
+                    </button>
+                  </div>
                   <span className="flex items-center gap-1">
                     Horas trabajadas: {runData.run.working_hours}
                     <button
@@ -506,7 +545,6 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
                     </button>
                   </span>
                   <span>SAM: {runData.run.sam_minutes} min</span>
-                  {/* In the run details section, replace the efficiency display with: */}
                   <span className="flex items-center gap-1">
                      Eficiencia: {Math.round(runData.run.efficiency * 100)}%
                    <button
@@ -596,46 +634,46 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
                   {operators && operators.length > 0 ? (
                     <div className="space-y-3">
                       {operators.map((operator) => (
-  <div key={operator.id} className="rounded-lg border border-gray-200 p-4">
-    <div className="flex items-center justify-between mb-2">
-      <div className="font-semibold text-gray-900">
-        Operador {operator.operator_no}
-      </div>
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => setOperatorToEdit(operator)}
-          className="text-sm text-blue-600 hover:text-blue-800"
-          title="Editar operador"
-        >
-          ✎
-        </button>
-        <div className="text-sm text-gray-600">
-          {operator.operations_count || 0} operaciones
-        </div>
-        <button
-          onClick={() => setOperatorToDelete(operator)}
-          className="text-sm text-red-600 hover:text-red-800"
-          title="Eliminar operador"
-        >
-          ✕
-        </button>
-      </div>
-    </div>
+                        <div key={operator.id} className="rounded-lg border border-gray-200 p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="font-semibold text-gray-900">
+                              Operador {operator.operator_no}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => setOperatorToEdit(operator)}
+                                className="text-blue-600 hover:text-blue-800"
+                                title="Editar operador"
+                              >
+                                ✎
+                              </button>
+                              <div className="text-sm text-gray-600">
+                                {operator.operations_count || 0} operaciones
+                              </div>
+                              <button
+                                onClick={() => setOperatorToDelete(operator)}
+                                className="text-red-600 hover:text-red-800"
+                                title="Eliminar operador"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
 
-    {operator.operator_name && (
-      <div className="text-sm text-gray-600 mb-3">
-        Nombre: {operator.operator_name}
-      </div>
-    )}
+                          {operator.operator_name && (
+                            <div className="text-sm text-gray-600 mb-3">
+                              Nombre: {operator.operator_name}
+                            </div>
+                          )}
 
-    <button
-      onClick={() => setActivePanel("operations")}
-      className="text-sm text-blue-600 hover:text-blue-800"
-    >
-      Ver operaciones →
-    </button>
-  </div>
-))}
+                          <button
+                            onClick={() => setActivePanel("operations")}
+                            className="text-sm text-blue-600 hover:text-blue-800"
+                          >
+                            Ver operaciones →
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <div className="text-center py-8 text-gray-600">
@@ -673,6 +711,16 @@ const [isUpdatingEfficiency, setIsUpdatingEfficiency] = useState(false);
           )}
         </div>
       )}
+
+      
+{showOperatorModal && (
+  <OperatorCountEditModal
+    runId={runData?.run?.id}
+    currentCount={runData?.run?.operators_count}  // Fix this line
+    onClose={() => setShowOperatorModal(false)}
+    onUpdate={handleOperatorUpdate}
+  />
+)}
 
       {/* Add Operator Modal */}
       {showAddOperator && selectedRun && (

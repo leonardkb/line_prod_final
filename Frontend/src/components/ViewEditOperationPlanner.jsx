@@ -7,17 +7,17 @@ function normalizeNo(v) {
   return s === "" ? "" : s;
 }
 
-function sumStitchedForRow(row, slots) {
+function sumSewedForRow(row, slots) {
   let sum = 0;
   (slots || []).forEach((s) => {
-    const v = Number(row.stitched?.[s.id]);
+    const v = Number(row.sewed?.[s.id]);
     if (Number.isFinite(v)) sum += v;
   });
   return sum;
 }
 
-function sumStitchedForRowAtSlot(row, slotId) {
-  const v = Number(row.stitched?.[slotId]);
+function sumSewedForRowAtSlot(row, slotId) {
+  const v = Number(row.sewed?.[slotId]);
   return Number.isFinite(v) ? v : 0;
 }
 
@@ -178,16 +178,22 @@ export default function ViewEditOperationPlanner({
         );
       }
 
-      return {
-        ...row,
-        capPerOperator,
-        // Ensure t fields are strings for input
+      const newRow = {
+        id: row.id,
+        operatorNo: row.operatorNo,
+        operatorName: row.operatorName,
+        operation: row.operation,
         t1: row.t1?.toString() || "",
         t2: row.t2?.toString() || "",
         t3: row.t3?.toString() || "",
         t4: row.t4?.toString() || "",
         t5: row.t5?.toString() || "",
+        stitched: row.stitched,
+        sewed: row.sewed,
+        capPerOperator: capPerOperator,
       };
+      
+      return newRow;
     });
   }, [rows]);
 
@@ -224,7 +230,21 @@ export default function ViewEditOperationPlanner({
     setRows(prevRows => 
       prevRows.map(row => {
         if (row.id === rowId) {
-          return { ...row, [field]: value };
+          const updatedRow = {
+            id: row.id,
+            operatorNo: row.operatorNo,
+            operatorName: row.operatorName,
+            operation: row.operation,
+            t1: row.t1,
+            t2: row.t2,
+            t3: row.t3,
+            t4: row.t4,
+            t5: row.t5,
+            stitched: row.stitched,
+            sewed: row.sewed,
+            [field]: value,
+          };
+          return updatedRow;
         }
         return row;
       })
@@ -245,11 +265,10 @@ export default function ViewEditOperationPlanner({
 
   // Show history
   const showHistory = (row) => {
-    // Extract the actual operation ID from the row ID (format: db_123)
     const operationId = row.id.replace('db_', '');
     setHistoryModal({
       open: true,
-      operationId,
+      operationId: operationId,
       operationName: row.operation,
       operatorNo: row.operatorNo
     });
@@ -268,7 +287,6 @@ export default function ViewEditOperationPlanner({
     try {
       const token = localStorage.getItem("token");
       
-      // Prepare the operation data
       const operationData = {
         operatorNo: row.operatorNo,
         operationName: row.operation,
@@ -280,7 +298,6 @@ export default function ViewEditOperationPlanner({
         capacityPerHour: row.capPerOperator || 0
       };
 
-      // Make API call to update the operation
       const response = await fetch(`http://localhost:5000/api/update-operation/${runId}`, {
         method: "PUT",
         headers: {
@@ -298,7 +315,6 @@ export default function ViewEditOperationPlanner({
           : "✅ Operación actualizada correctamente.");
         setEditingRowId(null);
         
-        // If onSave callback is provided, call it
         if (onSave) {
           onSave();
         }
@@ -312,7 +328,6 @@ export default function ViewEditOperationPlanner({
     }
   };
 
-  // Agrupar por operador (solo filas visibles)
   const groups = useMemo(() => {
     const map = new Map();
     visibleRows.forEach((r) => {
@@ -329,21 +344,57 @@ export default function ViewEditOperationPlanner({
 
     return keys.map((k) => {
       const rows = map.get(k);
-      // For operators with multiple operations, calculate total per operator
-      const operatorTotal = rows.reduce((sum, row) => sum + sumStitchedForRow(row, slots), 0);
       
-      // Calculate per hour totals across all operations for this operator
-      const perHourTotals = (slots || []).map((s) =>
-        rows.reduce((sum, row) => sum + sumStitchedForRowAtSlot(row, s.id), 0)
-      );
+      // For each hour/slot, take the MINIMUM production across all operations (bottleneck)
+      const perHourTotals = (slots || []).map((s) => {
+        let minProduction = Infinity;
+        rows.forEach((row) => {
+          const production = sumSewedForRowAtSlot(row, s.id);
+          if (production < minProduction) {
+            minProduction = production;
+          }
+        });
+        return minProduction === Infinity ? 0 : minProduction;
+      });
       
-      return { operatorNo: k, rows, operatorTotal, perHourTotals };
+      // Total operator production = sum of bottleneck per hour across slots
+      const operatorTotal = perHourTotals.reduce((sum, val) => sum + val, 0);
+      
+      return { 
+        operatorNo: k, 
+        rows, 
+        operatorTotal, 
+        perHourTotals
+      };
     });
   }, [visibleRows, slots]);
 
-  // Total general
-  const totalStitched = useMemo(() => {
-    return computedRows.reduce((sum, row) => sum + sumStitchedForRow(row, slots), 0);
+  // Total sewed calculation using MIN per operator per hour
+  const totalSewed = useMemo(() => {
+    const operatorMap = new Map();
+    computedRows.forEach((row) => {
+      const operatorNo = normalizeNo(row.operatorNo);
+      if (!operatorNo) return;
+      if (!operatorMap.has(operatorNo)) operatorMap.set(operatorNo, []);
+      operatorMap.get(operatorNo).push(row);
+    });
+    
+    let total = 0;
+    for (const rows of operatorMap.values()) {
+      const perHourTotals = (slots || []).map((s) => {
+        let minProduction = Infinity;
+        rows.forEach((row) => {
+          const production = sumSewedForRowAtSlot(row, s.id);
+          if (production < minProduction) {
+            minProduction = production;
+          }
+        });
+        return minProduction === Infinity ? 0 : minProduction;
+      });
+      total += perHourTotals.reduce((sum, val) => sum + val, 0);
+    }
+    
+    return total;
   }, [computedRows, slots]);
 
   return (
@@ -406,7 +457,7 @@ export default function ViewEditOperationPlanner({
           </div>
 
           <div className="text-sm text-gray-600">
-            Total cosido: <span className="font-semibold">{totalStitched}</span>
+            Total cosido: <span className="font-semibold text-green-600">{totalSewed}</span>
           </div>
         </div>
       </div>
@@ -447,18 +498,19 @@ export default function ViewEditOperationPlanner({
                     </div>
                   </div>
 
+                  {/* Simple total display */}
                   <div className="text-sm text-gray-600 mb-3">
-                    Total piezas producidas (todas las operaciones):{" "}
-                    <span className="font-semibold">{g.operatorTotal}</span>
+                    Total producido:{" "}
+                    <span className="font-semibold text-green-600">{g.operatorTotal}</span>
                   </div>
 
-                  {/* Totales por hora del operador */}
+                  {/* Totales por hora */}
                   {slots?.length > 0 && (
                     <div className="grid grid-cols-10 gap-1">
                       {slots.map((s, i) => (
                         <div key={s.id} className="text-center">
                           <div className="text-xs text-gray-500 font-medium mb-1">{s.label}</div>
-                          <div className="text-sm font-semibold text-gray-900 bg-white rounded border px-1 py-0.5">
+                          <div className="text-sm font-semibold text-green-600 bg-white rounded border px-1 py-0.5">
                             {g.perHourTotals[i]}
                           </div>
                         </div>
@@ -522,7 +574,7 @@ export default function ViewEditOperationPlanner({
 
                           {/* Tiempos editables o de solo lectura */}
                           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-                            {['t1', 't2', 't3', 't4', 't5'].map((field, index) => (
+                            {['t1', 't2', 't3', 't4', 't5'].map((field) => (
                               <div key={field}>
                                 <div className="text-gray-500 mb-1">{field} (seg)</div>
                                 {isEditing ? (
@@ -555,12 +607,12 @@ export default function ViewEditOperationPlanner({
                           )}
                         </div>
 
-                        {/* Tabla por hora para esta operación (solo lectura) */}
+                        {/* Tabla por hora para esta operación */}
                         <div className="p-4">
                           <HourlyGrid
                             target={target}
                             slots={slots}
-                            stitched={row.stitched}
+                            stitched={row.sewed}
                             showStitchedInput={false}
                           />
                         </div>
