@@ -17,15 +17,21 @@ export default function AdvancedPlanningPage() {
   const [message, setMessage] = useState("");
 
   const [workOrderData, setWorkOrderData] = useState({
-    workOrderNo: "",
-    quantity: "",
-    customerName: "",
-    styleDescription: "",
-    color: "",
-    fabricSupplier: "",
-    styleCode: "",
-    lineNo: "",
-    runDate: "",
+    workOrderNo: "",          // Changed from workOrderNumber
+    totalQuantity: "",        // Fixed: Changed from quantity
+    warehouseStock: "",       // Added
+    extraQuantity: "",        // Added
+    totalToProduce: "",       // Added
+    commitmentDate: "",       // Added
+    customerId: "",           // Changed from customerName
+    customerName: "",         // Keep for display
+    styleDescription: "",     //style description from run  
+    color: "",                // color from run
+    fabricSupplier: "",       // fabric supplier from run
+    styleCode: "",            // style code from run
+    lineNo: "",               // line number from run
+    runDate: "",              // run date from run
+    fabrics: [],              // Added
   });
 
   useEffect(() => {
@@ -38,12 +44,16 @@ export default function AdvancedPlanningPage() {
     setActiveTab("assign");
   };
 
-  
   const handleCreateWorkOrder = () => {
     setSelectedWorkOrder(null);
     setWorkOrderData({
       workOrderNo: "",
-      quantity: "",
+      totalQuantity: "",
+      warehouseStock: "",
+      extraQuantity: "",
+      totalToProduce: "",
+      commitmentDate: "",
+      customerId: "",
       customerName: "",
       styleDescription: "",
       color: "",
@@ -51,6 +61,7 @@ export default function AdvancedPlanningPage() {
       styleCode: "",
       lineNo: "",
       runDate: "",
+      fabrics: [],
     });
     setActiveTab("create");
   };
@@ -73,7 +84,7 @@ export default function AdvancedPlanningPage() {
   const tabs = [
     { id: "dashboard", label: "Dashboard", visible: true },
     { id: "list", label: "Órdenes", visible: true },
-     { id: "planboard", label: "Plan Board", visible: true },  // NEW
+    { id: "planboard", label: "Plan Board", visible: true },
     { id: "create", label: "Crear Orden", visible: ["engineer", "supervisor", "soporte_it", "skyrina", "planner"].includes(userRole) },
     { id: "assign", label: "Asignar", visible: selectedWorkOrder !== null },
   ];
@@ -129,89 +140,73 @@ export default function AdvancedPlanningPage() {
         {/* Content */}
         <div className="space-y-6">
           {activeTab === "dashboard" && <PlanningDashboard />}
-          {activeTab === "planboard" && <PlanBoard />}  {/* NEW */ }
-{activeTab === "list" && (
-  <WorkOrderList 
-    onSelectWorkOrder={handleSelectWorkOrder}
-    onEdit={(order) => {
-      setSelectedWorkOrder(order);
-      setWorkOrderData({
-        workOrderNo: order.work_order_no,
-        quantity: order.quantity,
-        customerName: order.customer_name,
-        styleDescription: order.style_description,
-        color: order.color || "",
-        fabricSupplier: order.fabric_supplier || "",
-        styleCode: order.style_code || "",
-        lineNo: order.line_no || "",
-        runDate: order.run_date || "",
-      });
-      setActiveTab("create");
-    }}
-    onDelete={(id) => {
-      setMessage(`✅ Orden cancelada exitosamente`);
-      // Refresh the list automatically
-    }}
-  />
-)}
+          {activeTab === "planboard" && <PlanBoard />}
+          
+          {activeTab === "list" && (
+            <WorkOrderList 
+              onSelectWorkOrder={handleSelectWorkOrder}
+              onEdit={(order) => {
+                console.log("Editing order:", order); // Debug log
+                setSelectedWorkOrder(order);
+                setWorkOrderData({
+                  workOrderNo: order.work_order_no,
+                  totalQuantity: order.total_quantity || order.quantity,
+                  warehouseStock: order.warehouse_stock || 0,
+                  extraQuantity: order.extra_quantity || 0,
+                  totalToProduce: order.total_to_produce || order.quantity,
+                  commitmentDate: order.commitment_date,
+                  customerId: order.customer_id,
+                  customerName: order.customer_name,
+                  styleDescription: order.style_description,
+                  color: order.color || "",
+                  fabricSupplier: order.fabric_supplier || "",
+                  styleCode: order.style_code || "",
+                  lineNo: order.line_no || "",
+                  runDate: order.run_date || "",
+                  fabrics: order.fabrics || [],
+                });
+                setActiveTab("create");
+              }}
+              onDelete={(id) => {
+                setMessage(`✅ Orden cancelada exitosamente`);
+              }}
+            />
+          )}
           
           {activeTab === "create" && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <WorkOrderForm
-                  workOrderData={workOrderData}
-                  onChange={handleWorkOrderChange}
-                  selectedRun={selectedRun}
-                  onSuccess={(newOrder) => {
-                    setMessage(`✅ Orden ${newOrder.work_order_no} creada exitosamente`);
-                    setActiveTab("list");
-                    // Reset form
-                    setWorkOrderData({
-                      workOrderNo: "",
-                      quantity: "",
-                      customerName: "",
-                      styleDescription: "",
-                      color: "",
-                      fabricSupplier: "",
-                      styleCode: "",
-                      lineNo: "",
-                      runDate: "",
-                    });
-                    setSelectedRun(null);
-                  }}
-                  isEditMode={false}
-                />
-              </div>
-              <div className="lg:col-span-1">
-                <div className="bg-white rounded-xl border p-4">
-                  <h3 className="font-medium text-gray-900 mb-2">Información</h3>
-                  <p className="text-sm text-gray-600 mb-3">
-                    Complete todos los campos obligatorios para crear una nueva orden de trabajo.
-                  </p>
-                  
-                  {/* Style selection quick link */}
-                  <button
-                    onClick={() => {
-                      setActiveTab("dashboard");
-                      // You might want to navigate to style selector
-                    }}
-                    className="w-full mb-3 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 text-left"
-                  >
-                    📦 Buscar estilo existente
-                  </button>
-                  
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <p className="text-xs text-blue-800 font-medium mb-2">📋 Consejos:</p>
-                    <ul className="text-xs text-blue-700 space-y-1 list-disc list-inside">
-                      <li>Use un número de orden único y descriptivo</li>
-                      <li>Si seleccionó un estilo, la capacidad diaria se usará para estimar días</li>
-                      <li>La orden se creará con estado "Pendiente"</li>
-                      <li>Después de crear, puede asignarla a líneas desde la lista</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <WorkOrderForm
+              workOrderData={workOrderData}
+              onChange={handleWorkOrderChange}
+              selectedRun={selectedRun}
+              onSuccess={(updatedOrder) => {
+                setMessage(`✅ Orden ${updatedOrder?.work_order_no || ''} ${selectedWorkOrder ? 'actualizada' : 'creada'} exitosamente`);
+                setActiveTab("list");
+                // Reset form only for create mode, not for edit
+                if (!selectedWorkOrder) {
+                  setWorkOrderData({
+                    workOrderNo: "",
+                    totalQuantity: "",
+                    warehouseStock: "",
+                    extraQuantity: "",
+                    totalToProduce: "",
+                    commitmentDate: "",
+                    customerId: "",
+                    customerName: "",
+                    styleDescription: "",
+                    color: "",  
+                    fabricSupplier: "",
+                    styleCode: "",
+                    lineNo: "",
+                    runDate: "",
+                    fabrics: [],
+                  });
+                  setSelectedRun(null);
+                }
+                setSelectedWorkOrder(null);
+              }}
+              isEditMode={selectedWorkOrder !== null}
+              workOrderId={selectedWorkOrder?.id}  // ✅ CRITICAL FIX: Pass the work order ID
+            />
           )}
           
           {activeTab === "assign" && selectedWorkOrder && (

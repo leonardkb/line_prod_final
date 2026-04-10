@@ -11,7 +11,8 @@ export function safeNum(v, fallback = 0) {
  * sam: minutes per piece
  * efficiency: decimal (0.7 for 70%)
  */
-export function calcTargetFromSAM(operators, workingHours, sam, efficiency) {
+export function calcTargetFromSAM(operators, workingHours, sam, efficiency) 
+{
   const ops = safeNum(operators);
   const wh = safeNum(workingHours);
   const samMin = safeNum(sam);
@@ -52,7 +53,7 @@ export function calcCapacityPerHourForMultipleOperations(operations) {
   // Sum ALL time measurements from ALL operations
   let totalSum = 0;
   
-  operations.forEach(op => {
+  operations.forEach(op => { 
     totalSum += safeNum(op.t1, 0);
     totalSum += safeNum(op.t2, 0);
     totalSum += safeNum(op.t3, 0);
